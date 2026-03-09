@@ -102,13 +102,15 @@ server.tool(
     from: z.string().optional().describe("Filter by sender email address"),
     subject: z.string().optional().describe("Filter by subject line"),
     mailbox: z.string().optional().describe("Mailbox to search in (e.g., 'INBOX')"),
-    account: z.string().optional().describe("Account to search in"),
+    account: z.string().optional().describe("Account to search in (omit to search all accounts)"),
     isRead: z.boolean().optional().describe("Filter by read status"),
     isFlagged: z.boolean().optional().describe("Filter by flagged status"),
+    dateFrom: z.string().optional().describe("Start date filter (e.g., 'January 1, 2026')"),
+    dateTo: z.string().optional().describe("End date filter (e.g., 'March 1, 2026')"),
     limit: z.number().optional().describe("Maximum number of results (default: 50)"),
   },
-  withErrorHandling(({ query, mailbox, account, limit = 50 }) => {
-    const messages = mailManager.searchMessages(query, mailbox, account, limit);
+  withErrorHandling(({ query, mailbox, account, limit = 50, dateFrom, dateTo }) => {
+    const messages = mailManager.searchMessages(query, mailbox, account, limit, dateFrom, dateTo);
 
     if (messages.length === 0) {
       return successResponse("No messages found matching criteria");
@@ -117,7 +119,7 @@ server.tool(
     const messageList = messages
       .map(
         (m) =>
-          `  - ID: ${m.id} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
+          `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
       )
       .join("\n");
 
@@ -131,12 +133,17 @@ server.tool(
   "get-message",
   {
     id: z.string().min(1, "Message ID is required"),
+    preferHtml: z.boolean().optional().describe("Return HTML source instead of plain text"),
   },
-  withErrorHandling(({ id }) => {
+  withErrorHandling(({ id, preferHtml }) => {
     const content = mailManager.getMessageContent(id);
 
     if (!content) {
       return errorResponse(`Message with ID "${id}" not found`);
+    }
+
+    if (preferHtml && content.htmlContent) {
+      return successResponse(`Subject: ${content.subject}\n\n${content.htmlContent}`);
     }
 
     return successResponse(`Subject: ${content.subject}\n\n${content.plainText}`);
@@ -151,17 +158,22 @@ server.tool(
     mailbox: z.string().optional().describe("Mailbox to list messages from (default: INBOX)"),
     account: z.string().optional().describe("Account to list messages from"),
     limit: z.number().optional().describe("Maximum number of messages (default: 50)"),
+    offset: z.number().optional().describe("Number of messages to skip (for pagination)"),
+    from: z.string().optional().describe("Filter by sender email address or name"),
     unreadOnly: z.boolean().optional().describe("Only show unread messages"),
   },
-  withErrorHandling(({ mailbox, account, limit = 50 }) => {
-    const messages = mailManager.listMessages(mailbox, account, limit);
+  withErrorHandling(({ mailbox, account, limit = 50, offset = 0, from }) => {
+    const messages = mailManager.listMessages(mailbox, account, limit, from, offset);
 
     if (messages.length === 0) {
       return successResponse("No messages found");
     }
 
     const messageList = messages
-      .map((m) => `  - ID: ${m.id} | ${m.subject} (from: ${m.sender})`)
+      .map(
+        (m) =>
+          `  - ID: ${m.id} | ${m.dateReceived.toLocaleDateString()} | ${m.subject} (from: ${m.sender})`
+      )
       .join("\n");
 
     return successResponse(`Found ${messages.length} message(s):\n${messageList}`);
@@ -312,6 +324,24 @@ server.tool(
   }, "Error flagging message")
 );
 
+// --- unflag-message ---
+
+server.tool(
+  "unflag-message",
+  {
+    id: z.string().min(1, "Message ID is required"),
+  },
+  withErrorHandling(({ id }) => {
+    const success = mailManager.unflagMessage(id);
+
+    if (!success) {
+      return errorResponse(`Failed to unflag message "${id}"`);
+    }
+
+    return successResponse("Message unflagged");
+  }, "Error unflagging message")
+);
+
 // --- delete-message ---
 
 server.tool(
@@ -420,6 +450,72 @@ server.tool(
   }, "Error batch marking messages as read")
 );
 
+// --- batch-mark-as-unread ---
+
+server.tool(
+  "batch-mark-as-unread",
+  {
+    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+  },
+  withErrorHandling(({ ids }) => {
+    const results = mailManager.batchMarkAsUnread(ids);
+    const successCount = results.filter((r) => r.success).length;
+    const failCount = results.length - successCount;
+
+    if (failCount === 0) {
+      return successResponse(`Successfully marked ${successCount} message(s) as unread`);
+    } else if (successCount === 0) {
+      return errorResponse(`Failed to mark all ${failCount} message(s) as unread`);
+    } else {
+      return successResponse(`Marked ${successCount} message(s) as unread, ${failCount} failed`);
+    }
+  }, "Error batch marking messages as unread")
+);
+
+// --- batch-flag-messages ---
+
+server.tool(
+  "batch-flag-messages",
+  {
+    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+  },
+  withErrorHandling(({ ids }) => {
+    const results = mailManager.batchFlagMessages(ids);
+    const successCount = results.filter((r) => r.success).length;
+    const failCount = results.length - successCount;
+
+    if (failCount === 0) {
+      return successResponse(`Successfully flagged ${successCount} message(s)`);
+    } else if (successCount === 0) {
+      return errorResponse(`Failed to flag all ${failCount} message(s)`);
+    } else {
+      return successResponse(`Flagged ${successCount} message(s), ${failCount} failed`);
+    }
+  }, "Error batch flagging messages")
+);
+
+// --- batch-unflag-messages ---
+
+server.tool(
+  "batch-unflag-messages",
+  {
+    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+  },
+  withErrorHandling(({ ids }) => {
+    const results = mailManager.batchUnflagMessages(ids);
+    const successCount = results.filter((r) => r.success).length;
+    const failCount = results.length - successCount;
+
+    if (failCount === 0) {
+      return successResponse(`Successfully unflagged ${successCount} message(s)`);
+    } else if (successCount === 0) {
+      return errorResponse(`Failed to unflag all ${failCount} message(s)`);
+    } else {
+      return successResponse(`Unflagged ${successCount} message(s), ${failCount} failed`);
+    }
+  }, "Error batch unflagging messages")
+);
+
 // --- list-attachments ---
 
 server.tool(
@@ -443,6 +539,26 @@ server.tool(
 
     return successResponse(`Found ${attachments.length} attachment(s):\n${attachmentList}`);
   }, "Error listing attachments")
+);
+
+// --- save-attachment ---
+
+server.tool(
+  "save-attachment",
+  {
+    id: z.string().min(1, "Message ID is required"),
+    attachmentName: z.string().min(1, "Attachment name is required"),
+    savePath: z.string().min(1, "Save directory path is required"),
+  },
+  withErrorHandling(({ id, attachmentName, savePath }) => {
+    const success = mailManager.saveAttachment(id, attachmentName, savePath);
+
+    if (!success) {
+      return errorResponse(`Failed to save attachment "${attachmentName}"`);
+    }
+
+    return successResponse(`Attachment "${attachmentName}" saved to ${savePath}`);
+  }, "Error saving attachment")
 );
 
 // =============================================================================
@@ -485,6 +601,64 @@ server.tool(
   }, "Error getting unread count")
 );
 
+// --- create-mailbox ---
+
+server.tool(
+  "create-mailbox",
+  {
+    name: z.string().min(1, "Mailbox name is required"),
+    account: z.string().optional().describe("Account to create the mailbox in"),
+  },
+  withErrorHandling(({ name, account }) => {
+    const success = mailManager.createMailbox(name, account);
+
+    if (!success) {
+      return errorResponse(`Failed to create mailbox "${name}"`);
+    }
+
+    return successResponse(`Mailbox "${name}" created`);
+  }, "Error creating mailbox")
+);
+
+// --- delete-mailbox ---
+
+server.tool(
+  "delete-mailbox",
+  {
+    name: z.string().min(1, "Mailbox name is required"),
+    account: z.string().optional().describe("Account containing the mailbox"),
+  },
+  withErrorHandling(({ name, account }) => {
+    const success = mailManager.deleteMailbox(name, account);
+
+    if (!success) {
+      return errorResponse(`Failed to delete mailbox "${name}"`);
+    }
+
+    return successResponse(`Mailbox "${name}" deleted`);
+  }, "Error deleting mailbox")
+);
+
+// --- rename-mailbox ---
+
+server.tool(
+  "rename-mailbox",
+  {
+    oldName: z.string().min(1, "Current mailbox name is required"),
+    newName: z.string().min(1, "New mailbox name is required"),
+    account: z.string().optional().describe("Account containing the mailbox"),
+  },
+  withErrorHandling(({ oldName, newName, account }) => {
+    const success = mailManager.renameMailbox(oldName, newName, account);
+
+    if (!success) {
+      return errorResponse(`Failed to rename mailbox "${oldName}" to "${newName}"`);
+    }
+
+    return successResponse(`Mailbox renamed from "${oldName}" to "${newName}"`);
+  }, "Error renaming mailbox")
+);
+
 // =============================================================================
 // Account Tools
 // =============================================================================
@@ -504,6 +678,206 @@ server.tool(
     const accountList = accounts.map((a) => `  - ${a.name}`).join("\n");
     return successResponse(`Found ${accounts.length} account(s):\n${accountList}`);
   }, "Error listing accounts")
+);
+
+// =============================================================================
+// Mail Rules Tools
+// =============================================================================
+
+// --- list-rules ---
+
+server.tool(
+  "list-rules",
+  {},
+  withErrorHandling(() => {
+    const rules = mailManager.listRules();
+
+    if (rules.length === 0) {
+      return successResponse("No mail rules found");
+    }
+
+    const ruleList = rules
+      .map((r) => `  - ${r.name} [${r.enabled ? "enabled" : "disabled"}]`)
+      .join("\n");
+
+    return successResponse(`Found ${rules.length} rule(s):\n${ruleList}`);
+  }, "Error listing rules")
+);
+
+// --- enable-rule ---
+
+server.tool(
+  "enable-rule",
+  {
+    name: z.string().min(1, "Rule name is required"),
+  },
+  withErrorHandling(({ name }) => {
+    const success = mailManager.setRuleEnabled(name, true);
+
+    if (!success) {
+      return errorResponse(`Failed to enable rule "${name}"`);
+    }
+
+    return successResponse(`Rule "${name}" enabled`);
+  }, "Error enabling rule")
+);
+
+// --- disable-rule ---
+
+server.tool(
+  "disable-rule",
+  {
+    name: z.string().min(1, "Rule name is required"),
+  },
+  withErrorHandling(({ name }) => {
+    const success = mailManager.setRuleEnabled(name, false);
+
+    if (!success) {
+      return errorResponse(`Failed to disable rule "${name}"`);
+    }
+
+    return successResponse(`Rule "${name}" disabled`);
+  }, "Error disabling rule")
+);
+
+// =============================================================================
+// Contacts Tools
+// =============================================================================
+
+// --- search-contacts ---
+
+server.tool(
+  "search-contacts",
+  {
+    query: z.string().min(1, "Search query is required"),
+  },
+  withErrorHandling(({ query }) => {
+    const contacts = mailManager.searchContacts(query);
+
+    if (contacts.length === 0) {
+      return successResponse("No contacts found");
+    }
+
+    const contactList = contacts
+      .map((c) => {
+        const emails = c.emails.length > 0 ? c.emails.join(", ") : "no email";
+        return `  - ${c.name} (${emails})`;
+      })
+      .join("\n");
+
+    return successResponse(`Found ${contacts.length} contact(s):\n${contactList}`);
+  }, "Error searching contacts")
+);
+
+// =============================================================================
+// Email Template Tools
+// =============================================================================
+
+// --- save-template ---
+
+server.tool(
+  "save-template",
+  {
+    name: z.string().min(1, "Template name is required"),
+    subject: z.string().min(1, "Subject is required"),
+    body: z.string().min(1, "Body is required"),
+    to: z.array(z.string()).optional().describe("Default recipients"),
+    cc: z.array(z.string()).optional().describe("Default CC recipients"),
+    id: z.string().optional().describe("Template ID (for updating existing template)"),
+  },
+  withErrorHandling(({ name, subject, body, to, cc, id }) => {
+    const template = mailManager.saveTemplate(name, subject, body, to, cc, id);
+
+    return successResponse(`Template "${template.name}" saved with ID: ${template.id}`);
+  }, "Error saving template")
+);
+
+// --- list-templates ---
+
+server.tool(
+  "list-templates",
+  {},
+  withErrorHandling(() => {
+    const templates = mailManager.listTemplates();
+
+    if (templates.length === 0) {
+      return successResponse("No templates saved");
+    }
+
+    const templateList = templates
+      .map((t) => `  - [${t.id}] ${t.name} — "${t.subject}"`)
+      .join("\n");
+
+    return successResponse(`Found ${templates.length} template(s):\n${templateList}`);
+  }, "Error listing templates")
+);
+
+// --- get-template ---
+
+server.tool(
+  "get-template",
+  {
+    id: z.string().min(1, "Template ID is required"),
+  },
+  withErrorHandling(({ id }) => {
+    const template = mailManager.getTemplate(id);
+
+    if (!template) {
+      return errorResponse(`Template "${id}" not found`);
+    }
+
+    const lines = [
+      `Name: ${template.name}`,
+      `Subject: ${template.subject}`,
+      template.to ? `To: ${template.to.join(", ")}` : null,
+      template.cc ? `CC: ${template.cc.join(", ")}` : null,
+      `\n${template.body}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return successResponse(lines);
+  }, "Error getting template")
+);
+
+// --- delete-template ---
+
+server.tool(
+  "delete-template",
+  {
+    id: z.string().min(1, "Template ID is required"),
+  },
+  withErrorHandling(({ id }) => {
+    const success = mailManager.deleteTemplate(id);
+
+    if (!success) {
+      return errorResponse(`Template "${id}" not found`);
+    }
+
+    return successResponse(`Template "${id}" deleted`);
+  }, "Error deleting template")
+);
+
+// --- use-template ---
+
+server.tool(
+  "use-template",
+  {
+    id: z.string().min(1, "Template ID is required"),
+    to: z.array(z.string()).optional().describe("Override recipients"),
+    cc: z.array(z.string()).optional().describe("Override CC recipients"),
+    subject: z.string().optional().describe("Override subject"),
+    body: z.string().optional().describe("Override body"),
+  },
+  withErrorHandling(({ id, to, cc, subject, body }) => {
+    const success = mailManager.useTemplate(id, { to, cc, subject, body });
+
+    if (!success) {
+      return errorResponse(`Failed to use template "${id}". Template not found or no recipients.`);
+    }
+
+    return successResponse(`Draft created from template "${id}"`);
+  }, "Error using template")
 );
 
 // =============================================================================

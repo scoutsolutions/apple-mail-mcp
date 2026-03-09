@@ -403,6 +403,66 @@ export interface BatchOperationResult {
 }
 
 // =============================================================================
+// Mail Rules
+// =============================================================================
+
+/**
+ * Represents a mail rule in Apple Mail.
+ */
+export interface MailRule {
+  /** Rule name */
+  name: string;
+
+  /** Whether the rule is enabled */
+  enabled: boolean;
+}
+
+// =============================================================================
+// Contacts
+// =============================================================================
+
+/**
+ * Represents a contact from Contacts.app.
+ */
+export interface Contact {
+  /** Full name */
+  name: string;
+
+  /** Email addresses */
+  emails: string[];
+
+  /** Phone numbers */
+  phones: string[];
+}
+
+// =============================================================================
+// Email Templates
+// =============================================================================
+
+/**
+ * Represents a stored email template.
+ */
+export interface EmailTemplate {
+  /** Template identifier */
+  id: string;
+
+  /** Template name */
+  name: string;
+
+  /** Default subject line */
+  subject: string;
+
+  /** Template body */
+  body: string;
+
+  /** Default recipients */
+  to?: string[];
+
+  /** Default CC recipients */
+  cc?: string[];
+}
+
+// =============================================================================
 // Sync Detection
 // =============================================================================
 

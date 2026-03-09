@@ -26,6 +26,9 @@ import type {
   BatchOperationResult,
   SyncStatus,
   RecentlyReceivedStats,
+  MailRule,
+  Contact,
+  EmailTemplate,
 } from "@/types.js";
 
 // =============================================================================
@@ -251,7 +254,27 @@ export class AppleMailManager {
    * @param limit - Maximum number of results
    * @returns Array of matching messages
    */
-  searchMessages(query?: string, mailbox?: string, account?: string, limit = 50): Message[] {
+  searchMessages(
+    query?: string,
+    mailbox?: string,
+    account?: string,
+    limit = 50,
+    dateFrom?: string,
+    dateTo?: string
+  ): Message[] {
+    // If no account specified, search across all accounts
+    if (!account) {
+      const accounts = this.listAccounts();
+      const allMessages: Message[] = [];
+      for (const acct of accounts) {
+        if (allMessages.length >= limit) break;
+        const remaining = limit - allMessages.length;
+        const msgs = this.searchMessages(query, mailbox, acct.name, remaining, dateFrom, dateTo);
+        allMessages.push(...msgs);
+      }
+      return allMessages.slice(0, limit);
+    }
+
     const targetAccount = this.resolveAccount(account);
     const requestedMailbox = mailbox || "INBOX";
     const targetMailbox = this.resolveMailbox(requestedMailbox, targetAccount);
@@ -263,6 +286,19 @@ export class AppleMailManager {
       searchCondition = `whose subject contains "${safeQuery}" or sender contains "${safeQuery}"`;
     }
 
+    // Build date filter AppleScript
+    let dateFilter = "";
+    if (dateFrom || dateTo) {
+      const dateChecks: string[] = [];
+      if (dateFrom) {
+        dateChecks.push(`date received of msg >= date "${dateFrom}"`);
+      }
+      if (dateTo) {
+        dateChecks.push(`date received of msg <= date "${dateTo}"`);
+      }
+      dateFilter = dateChecks.join(" and ");
+    }
+
     const searchCommand = `
       set outputText to ""
       set theMailbox to mailbox "${escapeForAppleScript(targetMailbox)}"
@@ -271,22 +307,24 @@ export class AppleMailManager {
       repeat with msg in allMessages
         if msgCount >= ${limit} then exit repeat
         try
+          ${dateFilter ? `set msgDate to date received of msg\n          if not (${dateFilter}) then\n            -- skip message outside date range\n          else` : ""}
           set msgId to id of msg as string
           set msgSubject to subject of msg
           set msgSender to sender of msg
-          set msgDate to date received of msg as string
+          set msgDateStr to date received of msg as string
           set msgRead to read status of msg as string
           set msgFlagged to flagged status of msg as string
           if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
-          set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged
+          set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDateStr & "|||" & msgRead & "|||" & msgFlagged
           set msgCount to msgCount + 1
+          ${dateFilter ? "end if" : ""}
         end try
       end repeat
       return outputText
     `;
 
     const script = buildAccountScopedScript(targetAccount, searchCommand);
-    const result = executeAppleScript(script);
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success) {
       console.error(`Failed to search messages: ${result.error}`);
@@ -373,7 +411,11 @@ export class AppleMailManager {
                 set msg to item 1 of matchingMsgs
                 set msgSubject to subject of msg
                 set msgContent to content of msg
-                return msgSubject & "|||CONTENT|||" & msgContent
+                set htmlContent to ""
+                try
+                  set htmlContent to source of msg
+                end try
+                return msgSubject & "|||CONTENT|||" & msgContent & "|||HTML|||" & htmlContent
               end if
             end try
           end repeat
@@ -391,13 +433,18 @@ export class AppleMailManager {
       return null;
     }
 
-    const parts = result.output.split("|||CONTENT|||");
+    const htmlSplit = result.output.split("|||HTML|||");
+    const contentPart = htmlSplit[0];
+    const htmlContent = htmlSplit.length > 1 ? htmlSplit[1] : undefined;
+
+    const parts = contentPart.split("|||CONTENT|||");
     if (parts.length < 2) return null;
 
     return {
       id: id.toString(),
       subject: parts[0],
       plainText: parts[1],
+      htmlContent: htmlContent || undefined,
     };
   }
 
@@ -409,27 +456,41 @@ export class AppleMailManager {
    * @param limit - Maximum number of messages
    * @returns Array of messages
    */
-  listMessages(mailbox?: string, account?: string, limit = 50): Message[] {
+  listMessages(
+    mailbox?: string,
+    account?: string,
+    limit = 50,
+    from?: string,
+    offset = 0
+  ): Message[] {
     const targetAccount = this.resolveAccount(account);
     const requestedMailbox = mailbox || "INBOX";
     const targetMailbox = this.resolveMailbox(requestedMailbox, targetAccount);
+
+    const safeFrom = from ? escapeForAppleScript(from) : "";
+    const fromFilter = from ? `whose sender contains "${safeFrom}"` : "";
 
     const listCommand = `
       set outputText to ""
       set theMailbox to mailbox "${escapeForAppleScript(targetMailbox)}"
       set msgCount to 0
-      repeat with msg in messages of theMailbox
+      set skipped to 0
+      repeat with msg in messages of theMailbox ${fromFilter}
         if msgCount >= ${limit} then exit repeat
         try
-          set msgId to id of msg as string
-          set msgSubject to subject of msg
-          set msgSender to sender of msg
-          set msgDate to date received of msg as string
-          set msgRead to read status of msg as string
-          set msgFlagged to flagged status of msg as string
-          if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
-          set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged
-          set msgCount to msgCount + 1
+          if skipped < ${offset} then
+            set skipped to skipped + 1
+          else
+            set msgId to id of msg as string
+            set msgSubject to subject of msg
+            set msgSender to sender of msg
+            set msgDate to date received of msg as string
+            set msgRead to read status of msg as string
+            set msgFlagged to flagged status of msg as string
+            if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
+            set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged
+            set msgCount to msgCount + 1
+          end if
         end try
       end repeat
       return outputText
@@ -908,22 +969,53 @@ export class AppleMailManager {
 
   /**
    * Mark multiple messages as read at once.
-   *
-   * @param ids - Array of message IDs to mark as read
-   * @returns Array of results for each message
    */
   batchMarkAsRead(ids: string[]): BatchOperationResult[] {
     const results: BatchOperationResult[] = [];
-
     for (const id of ids) {
       const success = this.markAsRead(id);
+      results.push({ id, success, error: success ? undefined : "Failed to mark message as read" });
+    }
+    return results;
+  }
+
+  /**
+   * Mark multiple messages as unread at once.
+   */
+  batchMarkAsUnread(ids: string[]): BatchOperationResult[] {
+    const results: BatchOperationResult[] = [];
+    for (const id of ids) {
+      const success = this.markAsUnread(id);
       results.push({
         id,
         success,
-        error: success ? undefined : "Failed to mark message as read",
+        error: success ? undefined : "Failed to mark message as unread",
       });
     }
+    return results;
+  }
 
+  /**
+   * Flag multiple messages at once.
+   */
+  batchFlagMessages(ids: string[]): BatchOperationResult[] {
+    const results: BatchOperationResult[] = [];
+    for (const id of ids) {
+      const success = this.flagMessage(id);
+      results.push({ id, success, error: success ? undefined : "Failed to flag message" });
+    }
+    return results;
+  }
+
+  /**
+   * Unflag multiple messages at once.
+   */
+  batchUnflagMessages(ids: string[]): BatchOperationResult[] {
+    const results: BatchOperationResult[] = [];
+    for (const id of ids) {
+      const success = this.unflagMessage(id);
+      results.push({ id, success, error: success ? undefined : "Failed to unflag message" });
+    }
     return results;
   }
 
@@ -982,6 +1074,49 @@ export class AppleMailManager {
     }
 
     return attachments;
+  }
+
+  /**
+   * Save an attachment from a message to disk.
+   */
+  saveAttachment(id: string, attachmentName: string, savePath: string): boolean {
+    const safeName = escapeForAppleScript(attachmentName);
+    const safePath = escapeForAppleScript(savePath);
+
+    const script = buildAppLevelScript(`
+      try
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${id})
+              if (count of matchingMsgs) > 0 then
+                set msg to item 1 of matchingMsgs
+                repeat with att in mail attachments of msg
+                  if name of att is "${safeName}" then
+                    set savePath to POSIX file "${safePath}/${safeName}"
+                    save att in savePath
+                    return "ok"
+                  end if
+                end repeat
+                return "error:Attachment not found"
+              end if
+            end try
+          end repeat
+        end repeat
+        return "error:Message not found"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
+
+    if (!result.success || result.output.startsWith("error:")) {
+      console.error(`Failed to save attachment: ${result.error || result.output}`);
+      return false;
+    }
+
+    return true;
   }
 
   // ===========================================================================
@@ -1067,6 +1202,103 @@ export class AppleMailManager {
     return parseInt(result.output) || 0;
   }
 
+  /**
+   * Create a new mailbox.
+   */
+  createMailbox(name: string, account?: string): boolean {
+    const targetAccount = this.resolveAccount(account);
+    const safeName = escapeForAppleScript(name);
+    const safeAccount = escapeForAppleScript(targetAccount);
+
+    const script = buildAppLevelScript(`
+      try
+        make new mailbox with properties {name:"${safeName}"} at account "${safeAccount}"
+        return "ok"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+
+    const result = executeAppleScript(script);
+
+    if (!result.success || result.output.startsWith("error:")) {
+      console.error(`Failed to create mailbox: ${result.error || result.output}`);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Delete a mailbox.
+   */
+  deleteMailbox(name: string, account?: string): boolean {
+    const targetAccount = this.resolveAccount(account);
+    const targetMailbox = this.resolveMailbox(name, targetAccount);
+    const safeName = escapeForAppleScript(targetMailbox);
+    const safeAccount = escapeForAppleScript(targetAccount);
+
+    const script = buildAppLevelScript(`
+      try
+        delete mailbox "${safeName}" of account "${safeAccount}"
+        return "ok"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+
+    const result = executeAppleScript(script);
+
+    if (!result.success || result.output.startsWith("error:")) {
+      console.error(`Failed to delete mailbox: ${result.error || result.output}`);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Rename a mailbox by creating a new one, moving messages, and deleting the old one.
+   */
+  renameMailbox(oldName: string, newName: string, account?: string): boolean {
+    const targetAccount = this.resolveAccount(account);
+
+    // Create the new mailbox
+    if (!this.createMailbox(newName, targetAccount)) {
+      return false;
+    }
+
+    // Move all messages from old to new
+    const resolvedOld = this.resolveMailbox(oldName, targetAccount);
+    const resolvedNew = this.resolveMailbox(newName, targetAccount);
+    const safeOld = escapeForAppleScript(resolvedOld);
+    const safeNew = escapeForAppleScript(resolvedNew);
+    const safeAccount = escapeForAppleScript(targetAccount);
+
+    const moveScript = buildAppLevelScript(`
+      try
+        set srcMailbox to mailbox "${safeOld}" of account "${safeAccount}"
+        set destMailbox to mailbox "${safeNew}" of account "${safeAccount}"
+        repeat with msg in messages of srcMailbox
+          move msg to destMailbox
+        end repeat
+        delete mailbox "${safeOld}" of account "${safeAccount}"
+        return "ok"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+
+    const result = executeAppleScript(moveScript, { timeoutMs: 60000 });
+
+    if (!result.success || result.output.startsWith("error:")) {
+      console.error(`Failed to rename mailbox: ${result.error || result.output}`);
+      return false;
+    }
+
+    return true;
+  }
+
   // ===========================================================================
   // Account Operations
   // ===========================================================================
@@ -1115,6 +1347,204 @@ export class AppleMailManager {
     }
 
     return accounts;
+  }
+
+  // ===========================================================================
+  // Mail Rules
+  // ===========================================================================
+
+  /**
+   * List all mail rules.
+   */
+  listRules(): MailRule[] {
+    const script = buildAppLevelScript(`
+      set ruleList to {}
+      repeat with r in rules
+        set ruleName to name of r
+        set ruleEnabled to enabled of r
+        set end of ruleList to ruleName & "|||" & (ruleEnabled as string)
+      end repeat
+      set AppleScript's text item delimiters to "|||ITEM|||"
+      return ruleList as text
+    `);
+
+    const result = executeAppleScript(script);
+
+    if (!result.success || !result.output.trim()) {
+      return [];
+    }
+
+    const items = result.output.split("|||ITEM|||");
+    const rules: MailRule[] = [];
+
+    for (const item of items) {
+      const parts = item.split("|||");
+      if (parts.length < 2) continue;
+      rules.push({
+        name: parts[0],
+        enabled: parts[1] === "true",
+      });
+    }
+
+    return rules;
+  }
+
+  /**
+   * Enable or disable a mail rule.
+   */
+  setRuleEnabled(ruleName: string, enabled: boolean): boolean {
+    const safeName = escapeForAppleScript(ruleName);
+
+    const script = buildAppLevelScript(`
+      try
+        repeat with r in rules
+          if name of r is "${safeName}" then
+            set enabled of r to ${enabled}
+            return "ok"
+          end if
+        end repeat
+        return "error:Rule not found"
+      on error errMsg
+        return "error:" & errMsg
+      end try
+    `);
+
+    const result = executeAppleScript(script);
+
+    if (!result.success || result.output.startsWith("error:")) {
+      console.error(`Failed to set rule state: ${result.error || result.output}`);
+      return false;
+    }
+
+    return true;
+  }
+
+  // ===========================================================================
+  // Contacts Integration
+  // ===========================================================================
+
+  /**
+   * Search contacts by name or email.
+   */
+  searchContacts(query: string): Contact[] {
+    const safeQuery = escapeForAppleScript(query);
+
+    const script = `
+      tell application "Contacts"
+        set matchedContacts to {}
+        set foundPeople to (every person whose name contains "${safeQuery}") & (every person whose value of emails contains "${safeQuery}")
+
+        -- Deduplicate by tracking IDs
+        set seenIds to {}
+        repeat with p in foundPeople
+          set pid to id of p
+          if seenIds does not contain pid then
+            set end of seenIds to pid
+            set pName to name of p
+            set pEmails to ""
+            repeat with e in emails of p
+              if pEmails is not "" then set pEmails to pEmails & ","
+              set pEmails to pEmails & (value of e)
+            end repeat
+            set pPhones to ""
+            repeat with ph in phones of p
+              if pPhones is not "" then set pPhones to pPhones & ","
+              set pPhones to pPhones & (value of ph)
+            end repeat
+            set end of matchedContacts to pName & "|||" & pEmails & "|||" & pPhones
+          end if
+        end repeat
+
+        set AppleScript's text item delimiters to "|||ITEM|||"
+        return matchedContacts as text
+      end tell
+    `;
+
+    const result = executeAppleScript(script);
+
+    if (!result.success || !result.output.trim()) {
+      return [];
+    }
+
+    const items = result.output.split("|||ITEM|||");
+    const contacts: Contact[] = [];
+
+    for (const item of items) {
+      const parts = item.split("|||");
+      if (parts.length < 3) continue;
+      contacts.push({
+        name: parts[0],
+        emails: parts[1] ? parts[1].split(",").filter(Boolean) : [],
+        phones: parts[2] ? parts[2].split(",").filter(Boolean) : [],
+      });
+    }
+
+    return contacts;
+  }
+
+  // ===========================================================================
+  // Email Templates
+  // ===========================================================================
+
+  private templates: Map<string, EmailTemplate> = new Map();
+  private nextTemplateId = 1;
+
+  /**
+   * List all stored templates.
+   */
+  listTemplates(): EmailTemplate[] {
+    return Array.from(this.templates.values());
+  }
+
+  /**
+   * Get a template by ID.
+   */
+  getTemplate(id: string): EmailTemplate | null {
+    return this.templates.get(id) || null;
+  }
+
+  /**
+   * Create or update a template.
+   */
+  saveTemplate(
+    name: string,
+    subject: string,
+    body: string,
+    to?: string[],
+    cc?: string[],
+    id?: string
+  ): EmailTemplate {
+    const templateId = id || `tmpl_${this.nextTemplateId++}`;
+    const template: EmailTemplate = { id: templateId, name, subject, body, to, cc };
+    this.templates.set(templateId, template);
+    return template;
+  }
+
+  /**
+   * Delete a template.
+   */
+  deleteTemplate(id: string): boolean {
+    return this.templates.delete(id);
+  }
+
+  /**
+   * Use a template to create a draft.
+   */
+  useTemplate(
+    id: string,
+    overrides?: { to?: string[]; cc?: string[]; subject?: string; body?: string }
+  ): boolean {
+    const template = this.templates.get(id);
+    if (!template) return false;
+
+    const to = overrides?.to || template.to || [];
+    const cc = overrides?.cc || template.cc;
+    const subject = overrides?.subject || template.subject;
+    const body = overrides?.body || template.body;
+
+    if (to.length === 0) return false;
+
+    return this.createDraft(to, subject, body, cc);
   }
 
   // ===========================================================================
