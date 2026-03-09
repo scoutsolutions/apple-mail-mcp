@@ -127,6 +127,57 @@ export class AppleMailManager {
   private defaultAccount: string | null = null;
 
   /**
+   * TTL cache for expensive AppleScript queries that rarely change.
+   * Caches account list and per-account mailbox names to avoid
+   * redundant AppleScript roundtrips on every tool call.
+   */
+  private cache = {
+    accounts: null as { data: Account[]; expiry: number } | null,
+    mailboxNames: new Map<string, { data: string[]; expiry: number }>(),
+  };
+
+  /** Cache TTL in milliseconds (60 seconds). */
+  private readonly CACHE_TTL_MS = 60_000;
+
+  /**
+   * Returns cached accounts or fetches fresh data if cache is expired/empty.
+   */
+  private getCachedAccounts(): Account[] {
+    const now = Date.now();
+    if (this.cache.accounts && now < this.cache.accounts.expiry) {
+      return this.cache.accounts.data;
+    }
+    const accounts = this.fetchAccounts();
+    this.cache.accounts = { data: accounts, expiry: now + this.CACHE_TTL_MS };
+    return accounts;
+  }
+
+  /**
+   * Returns cached mailbox names for an account, or fetches fresh.
+   * This caches only the name list used by resolveMailbox(), not the
+   * full Mailbox objects with counts (which change frequently).
+   */
+  private getCachedMailboxNames(account: string): string[] {
+    const now = Date.now();
+    const cached = this.cache.mailboxNames.get(account);
+    if (cached && now < cached.expiry) {
+      return cached.data;
+    }
+    const names = this.fetchMailboxNames(account);
+    this.cache.mailboxNames.set(account, { data: names, expiry: now + this.CACHE_TTL_MS });
+    return names;
+  }
+
+  /**
+   * Invalidate all caches. Call after operations that change
+   * mailbox structure (create/delete/rename mailbox).
+   */
+  private invalidateCache(): void {
+    this.cache.accounts = null;
+    this.cache.mailboxNames.clear();
+  }
+
+  /**
    * Resolves the account to use for an operation.
    * Queries Mail.app's configured default send account, then falls back
    * to the first available account.
@@ -151,7 +202,7 @@ export class AppleMailManager {
       const emailMatch = senderOutput.match(/<([^>]+)>/);
       const defaultEmail = emailMatch ? emailMatch[1] : senderOutput;
 
-      const accounts = this.listAccounts();
+      const accounts = this.getCachedAccounts();
       const matchedAccount = accounts.find(
         (a) => a.email.toLowerCase() === defaultEmail.toLowerCase()
       );
@@ -162,7 +213,7 @@ export class AppleMailManager {
     }
 
     // Fall back to first available account
-    const accounts = this.listAccounts();
+    const accounts = this.getCachedAccounts();
     if (accounts.length > 0) {
       this.defaultAccount = accounts[0].name;
       return this.defaultAccount;
@@ -190,25 +241,10 @@ export class AppleMailManager {
    * @returns Actual mailbox name, or original if not found
    */
   private resolveMailbox(mailbox: string, account: string): string {
-    // Get actual mailbox names from the account
-    const script = buildAccountScopedScript(
-      account,
-      `
-      set mbNames to {}
-      repeat with mb in mailboxes
-        set end of mbNames to name of mb
-      end repeat
-      return mbNames
-    `
-    );
-
-    const result = executeAppleScript(script);
-    if (!result.success || !result.output) {
+    const actualMailboxes = this.getCachedMailboxNames(account);
+    if (actualMailboxes.length === 0) {
       return mailbox; // Fall back to original
     }
-
-    // Parse the mailbox names (AppleScript returns comma-separated list)
-    const actualMailboxes = result.output.split(", ").map((s) => s.trim());
 
     // 1. Try exact match
     if (actualMailboxes.includes(mailbox)) {
@@ -1226,6 +1262,7 @@ export class AppleMailManager {
       return false;
     }
 
+    this.invalidateCache();
     return true;
   }
 
@@ -1254,6 +1291,7 @@ export class AppleMailManager {
       return false;
     }
 
+    this.invalidateCache();
     return true;
   }
 
@@ -1296,6 +1334,7 @@ export class AppleMailManager {
       return false;
     }
 
+    this.invalidateCache();
     return true;
   }
 
@@ -1304,9 +1343,17 @@ export class AppleMailManager {
   // ===========================================================================
 
   /**
-   * List all mail accounts.
+   * List all mail accounts (uses cache).
    */
   listAccounts(): Account[] {
+    return this.getCachedAccounts();
+  }
+
+  /**
+   * Fetches account list directly from Mail.app via AppleScript.
+   * Used internally by the cache; prefer getCachedAccounts() or listAccounts().
+   */
+  private fetchAccounts(): Account[] {
     const script = buildAppLevelScript(`
       set accountList to {}
       repeat with acct in accounts
@@ -1347,6 +1394,30 @@ export class AppleMailManager {
     }
 
     return accounts;
+  }
+
+  /**
+   * Fetches mailbox names for an account directly from Mail.app.
+   * Used internally by the cache; prefer getCachedMailboxNames().
+   */
+  private fetchMailboxNames(account: string): string[] {
+    const script = buildAccountScopedScript(
+      account,
+      `
+      set mbNames to {}
+      repeat with mb in mailboxes
+        set end of mbNames to name of mb
+      end repeat
+      return mbNames
+    `
+    );
+
+    const result = executeAppleScript(script);
+    if (!result.success || !result.output) {
+      return [];
+    }
+
+    return result.output.split(", ").map((s) => s.trim());
   }
 
   // ===========================================================================
