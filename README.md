@@ -77,24 +77,49 @@ On first use, macOS will ask for permission to automate Mail.app. Click "OK" to 
 
 ## Features
 
+### Messages
+
 | Feature | Description |
 |---------|-------------|
-| **List Messages** | List messages in any mailbox |
-| **Search Messages** | Find emails by sender, subject, content |
-| **Read Messages** | Get full email content |
+| **List Messages** | List messages with pagination, sender filter, date display |
+| **Search Messages** | Search by sender, subject, content, date range, read/flagged status — across all accounts |
+| **Read Messages** | Get full email content (plain text or HTML) |
 | **Send Email** | Compose and send new emails |
 | **Create Draft** | Save emails to Drafts folder |
 | **Reply** | Reply to messages (with reply-all support) |
 | **Forward** | Forward messages to new recipients |
-| **Mark Read/Unread** | Change read status |
-| **Flag/Unflag** | Flag or unflag messages |
-| **Delete Messages** | Move messages to trash |
-| **Move Messages** | Organize into mailboxes |
-| **List Mailboxes** | Show all folders with counts |
+| **Mark Read/Unread** | Change read status (single or batch) |
+| **Flag/Unflag** | Flag or unflag messages (single or batch) |
+| **Delete Messages** | Move messages to trash (single or batch) |
+| **Move Messages** | Organize into mailboxes (single or batch) |
+| **List Attachments** | View attachment metadata (name, type, size) |
+| **Save Attachment** | Save attachments to disk |
+
+### Mailbox & Account Management
+
+| Feature | Description |
+|---------|-------------|
+| **List Mailboxes** | Show all folders with message/unread counts |
+| **Create/Delete/Rename Mailbox** | Full mailbox lifecycle management |
 | **List Accounts** | Show configured accounts |
 | **Unread Count** | Get unread counts per mailbox |
+
+### Rules, Contacts & Templates
+
+| Feature | Description |
+|---------|-------------|
+| **List Rules** | View all mail rules and their enabled status |
+| **Enable/Disable Rules** | Toggle mail rules on or off |
+| **Search Contacts** | Look up contacts from Contacts.app by name |
+| **Email Templates** | Save, list, use, and delete reusable email templates |
+
+### Diagnostics
+
+| Feature | Description |
+|---------|-------------|
 | **Health Check** | Verify Mail.app connectivity |
-| **Statistics** | Message and unread counts |
+| **Statistics** | Message and unread counts per account, recently received stats |
+| **Sync Status** | Check if Mail.app is actively syncing |
 
 ---
 
@@ -106,13 +131,19 @@ This section documents all available tools. AI agents should use these tool name
 
 #### `search-messages`
 
-Search for messages matching criteria.
+Search for messages matching criteria. Searches all accounts by default.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `query` | string | No | Text to search in subject/sender |
+| `from` | string | No | Filter by sender email address |
+| `subject` | string | No | Filter by subject line |
 | `mailbox` | string | No | Mailbox to search in (default: INBOX) |
-| `account` | string | No | Account to search in |
+| `account` | string | No | Account to search in (omit to search all accounts) |
+| `isRead` | boolean | No | Filter by read status |
+| `isFlagged` | boolean | No | Filter by flagged status |
+| `dateFrom` | string | No | Start date filter (e.g., "January 1, 2026") |
+| `dateTo` | string | No | End date filter (e.g., "March 1, 2026") |
 | `limit` | number | No | Max results (default: 50) |
 
 ---
@@ -124,8 +155,9 @@ Get the full content of a message.
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `id` | string | Yes | Message ID |
+| `preferHtml` | boolean | No | Return HTML source instead of plain text |
 
-**Returns:** Subject line and plain text body of the message.
+**Returns:** Subject line and message body (plain text by default, HTML if `preferHtml` is true and HTML content is available).
 
 ---
 
@@ -138,8 +170,11 @@ List messages in a mailbox.
 | `mailbox` | string | No | Mailbox name (default: INBOX) |
 | `account` | string | No | Account name |
 | `limit` | number | No | Max messages (default: 50) |
+| `offset` | number | No | Number of messages to skip (for pagination) |
+| `from` | string | No | Filter by sender email address or name |
+| `unreadOnly` | boolean | No | Only show unread messages |
 
-**Returns:** List of messages with ID, subject, sender, date, read status, and flagged status.
+**Returns:** List of messages with ID, date, subject, and sender.
 
 ---
 
@@ -271,6 +306,62 @@ Move a message to a different mailbox.
 
 ---
 
+#### `list-attachments`
+
+List attachments on a message.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID |
+
+**Returns:** List of attachments with name, MIME type, and size.
+
+---
+
+#### `save-attachment`
+
+Save a message attachment to disk.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Message ID |
+| `attachmentName` | string | Yes | Filename of the attachment |
+| `savePath` | string | Yes | Directory to save to |
+
+---
+
+### Batch Operations
+
+All batch operations accept an array of message IDs and return per-item success/failure results.
+
+#### `batch-delete-messages`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | Yes | Message IDs to delete |
+
+#### `batch-move-messages`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | Yes | Message IDs to move |
+| `mailbox` | string | Yes | Destination mailbox |
+| `account` | string | No | Account containing mailbox |
+
+#### `batch-mark-as-read` / `batch-mark-as-unread`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | Yes | Message IDs |
+
+#### `batch-flag-messages` / `batch-unflag-messages`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `ids` | string[] | Yes | Message IDs |
+
+---
+
 ### Mailbox Operations
 
 #### `list-mailboxes`
@@ -281,7 +372,7 @@ List all mailboxes for an account.
 |-----------|------|----------|-------------|
 | `account` | string | No | Account to list from |
 
-**Returns:** List of mailbox names with unread counts.
+**Returns:** List of mailbox names with message and unread counts.
 
 ---
 
@@ -296,6 +387,40 @@ Get unread message count.
 
 ---
 
+#### `create-mailbox`
+
+Create a new mailbox.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Mailbox name |
+| `account` | string | No | Account to create in |
+
+---
+
+#### `delete-mailbox`
+
+Delete a mailbox.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Mailbox name |
+| `account` | string | No | Account containing mailbox |
+
+---
+
+#### `rename-mailbox`
+
+Rename a mailbox (creates new, moves messages, deletes old).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `oldName` | string | Yes | Current mailbox name |
+| `newName` | string | Yes | New mailbox name |
+| `account` | string | No | Account containing mailbox |
+
+---
+
 ### Account Operations
 
 #### `list-accounts`
@@ -304,7 +429,105 @@ List all configured Mail accounts.
 
 **Parameters:** None
 
-**Returns:** List of account names (e.g., "iCloud", "Gmail", "Exchange").
+**Returns:** List of account names and email addresses.
+
+---
+
+### Rules
+
+#### `list-rules`
+
+List all mail rules.
+
+**Parameters:** None
+
+**Returns:** List of rule names and enabled status.
+
+---
+
+#### `enable-rule` / `disable-rule`
+
+Enable or disable a mail rule.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Rule name |
+
+---
+
+### Contacts
+
+#### `search-contacts`
+
+Search contacts in Contacts.app.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | Yes | Name to search for |
+| `limit` | number | No | Max results (default: 10) |
+
+**Returns:** List of contacts with name, email addresses, and phone numbers.
+
+---
+
+### Templates
+
+Email templates are stored in memory for the duration of the server session.
+
+#### `save-template`
+
+Save or update an email template.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | string | Yes | Template name |
+| `subject` | string | Yes | Default subject line |
+| `body` | string | Yes | Template body |
+| `to` | string[] | No | Default recipients |
+| `cc` | string[] | No | Default CC recipients |
+| `id` | string | No | Template ID (for updating) |
+
+---
+
+#### `list-templates`
+
+List all saved templates.
+
+**Parameters:** None
+
+---
+
+#### `get-template`
+
+Get a template by ID.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Template ID |
+
+---
+
+#### `delete-template`
+
+Delete a template.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Template ID |
+
+---
+
+#### `use-template`
+
+Create a draft from a template, with optional overrides.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Template ID |
+| `to` | string[] | No | Override recipients |
+| `cc` | string[] | No | Override CC |
+| `subject` | string | No | Override subject |
+| `body` | string | No | Override body |
 
 ---
 
@@ -322,11 +545,21 @@ Verify Mail.app connectivity and permissions.
 
 #### `get-mail-stats`
 
-Get mail statistics (total messages, unread counts per account).
+Get mail statistics.
 
 **Parameters:** None
 
-**Returns:** Total counts and per-account breakdown.
+**Returns:** Total and per-account message/unread counts, plus recently received stats (24h, 7d, 30d).
+
+---
+
+#### `get-sync-status`
+
+Check Mail.app sync activity.
+
+**Parameters:** None
+
+**Returns:** Whether sync is detected, pending uploads, recent activity, and seconds since last change.
 
 ---
 
@@ -350,7 +583,7 @@ AI: [calls get-message with id="..."]
 
 ### Working with Accounts
 
-By default, operations use the first configured account. To work with specific accounts:
+By default, operations use Mail.app's configured default send account. Search operations check all accounts when no account is specified. To work with specific accounts:
 
 ```
 User: "What email accounts do I have?"
@@ -429,10 +662,10 @@ If installed from source, use this configuration:
 | Limitation | Reason |
 |------------|--------|
 | macOS only | Apple Mail and AppleScript are macOS-specific |
-| Plain text only | Email body is plain text; HTML formatting not supported |
-| No attachments | Cannot add or read attachments via AppleScript |
-| Message ID scope | Message IDs are searched across all mailboxes (may be slow with large mailboxes) |
+| No sending HTML email | Emails are sent as plain text; reading HTML content is supported |
+| No adding attachments | Can list and save existing attachments, but cannot attach files to outgoing emails |
 | No smart mailboxes | Cannot access Smart Mailboxes via AppleScript |
+| In-memory templates | Email templates are not persisted across server restarts |
 
 ### Backslash Escaping (Important for AI Agents)
 
