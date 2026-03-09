@@ -125,13 +125,40 @@ export class AppleMailManager {
 
   /**
    * Resolves the account to use for an operation.
-   * Falls back to first available account if not specified.
+   * Queries Mail.app's configured default send account, then falls back
+   * to the first available account.
    */
   private resolveAccount(account?: string): string {
     if (account) return account;
     if (this.defaultAccount) return this.defaultAccount;
 
-    // Get first account as default
+    // Query Mail.app's default send account by inspecting a temporary outgoing message
+    const defaultResult = executeAppleScript(
+      buildAppLevelScript(`
+        set newMsg to make new outgoing message
+        set fromAddr to sender of newMsg
+        delete newMsg
+        return fromAddr
+      `)
+    );
+
+    if (defaultResult.success && defaultResult.output.trim()) {
+      // sender returns "Name <email>" — match to account by email address
+      const senderOutput = defaultResult.output.trim();
+      const emailMatch = senderOutput.match(/<([^>]+)>/);
+      const defaultEmail = emailMatch ? emailMatch[1] : senderOutput;
+
+      const accounts = this.listAccounts();
+      const matchedAccount = accounts.find(
+        (a) => a.email.toLowerCase() === defaultEmail.toLowerCase()
+      );
+      if (matchedAccount) {
+        this.defaultAccount = matchedAccount.name;
+        return this.defaultAccount;
+      }
+    }
+
+    // Fall back to first available account
     const accounts = this.listAccounts();
     if (accounts.length > 0) {
       this.defaultAccount = accounts[0].name;
