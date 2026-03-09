@@ -115,7 +115,10 @@ server.tool(
     }
 
     const messageList = messages
-      .map((m) => `  - ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`)
+      .map(
+        (m) =>
+          `  - ID: ${m.id} | ${m.subject} (from: ${m.sender}) [${m.isRead ? "read" : "unread"}]`
+      )
       .join("\n");
 
     return successResponse(`Found ${messages.length} message(s):\n${messageList}`);
@@ -157,7 +160,9 @@ server.tool(
       return successResponse("No messages found");
     }
 
-    const messageList = messages.map((m) => `  - ${m.subject} (from: ${m.sender})`).join("\n");
+    const messageList = messages
+      .map((m) => `  - ID: ${m.id} | ${m.subject} (from: ${m.sender})`)
+      .join("\n");
 
     return successResponse(`Found ${messages.length} message(s):\n${messageList}`);
   }, "Error listing messages")
