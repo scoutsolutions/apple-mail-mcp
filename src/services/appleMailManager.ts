@@ -13,6 +13,7 @@
  * @module services/appleMailManager
  */
 
+import { spawnSync } from "child_process";
 import { existsSync } from "fs";
 import { isAbsolute } from "path";
 import { executeAppleScript } from "@/utils/applescript.js";
@@ -716,8 +717,7 @@ export class AppleMailManager {
    * @param subject - Email subject (may contain {{placeholders}})
    * @param body - Email body (may contain {{placeholders}})
    * @param account - Account to send from
-   * @param attachments - Optional file paths to attach to each email
-   * @param delayMs - Delay between sends in milliseconds (default: 500)
+   * @param delayMs - Delay between sends in milliseconds (default: 500, max: 10000)
    * @returns Array of per-recipient results
    */
   sendSerialEmail(
@@ -727,9 +727,11 @@ export class AppleMailManager {
     account?: string,
     delayMs: number = 500
   ): SerialEmailResult[] {
+    const effectiveDelay = Math.min(Math.max(delayMs, 0), 10000);
     const results: SerialEmailResult[] = [];
 
-    for (const recipient of recipients) {
+    for (let i = 0; i < recipients.length; i++) {
+      const recipient = recipients[i];
       try {
         // Replace all {{Key}} placeholders with recipient's values
         let personalizedSubject = subject;
@@ -764,11 +766,8 @@ export class AppleMailManager {
       }
 
       // Brief delay between sends to avoid overwhelming Mail.app
-      if (delayMs > 0 && recipients.indexOf(recipient) < recipients.length - 1) {
-        const start = Date.now();
-        while (Date.now() - start < delayMs) {
-          /* busy wait - sync context */
-        }
+      if (effectiveDelay > 0 && i < recipients.length - 1) {
+        spawnSync("sleep", [(effectiveDelay / 1000).toString()], { stdio: "ignore" });
       }
     }
 

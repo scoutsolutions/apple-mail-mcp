@@ -223,7 +223,8 @@ server.tool(
         })
       )
       .min(1, "At least one recipient is required")
-      .describe("List of recipients with personalization variables"),
+      .max(100, "Cannot send to more than 100 recipients in a single batch")
+      .describe("List of recipients with personalization variables (max 100)"),
     subject: z
       .string()
       .min(1, "Subject is required")
@@ -233,7 +234,12 @@ server.tool(
       .min(1, "Body is required")
       .describe("Email body — use {{Key}} for placeholders"),
     account: z.string().optional().describe("Account to send from"),
-    delayMs: z.number().optional().describe("Delay between sends in ms (default: 500)"),
+    delayMs: z
+      .number()
+      .min(0)
+      .max(10000)
+      .optional()
+      .describe("Delay between sends in ms (default: 500, max: 10000)"),
   },
   withErrorHandling(({ recipients, subject, body, account, delayMs }) => {
     const results = mailManager.sendSerialEmail(recipients, subject, body, account, delayMs);
