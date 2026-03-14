@@ -697,7 +697,7 @@ export class AppleMailManager {
     }
 
     const script = buildAppLevelScript(sendCommand);
-    const result = executeAppleScript(script);
+    const result = executeAppleScript(script, { timeoutMs: 60000, maxRetries: 2 });
 
     if (!result.success) {
       console.error(`Failed to send email: ${result.error}`);
@@ -839,7 +839,7 @@ export class AppleMailManager {
     }
 
     const script = buildAppLevelScript(draftCommand);
-    const result = executeAppleScript(script);
+    const result = executeAppleScript(script, { timeoutMs: 60000, maxRetries: 2 });
 
     if (!result.success) {
       console.error(`Failed to create draft: ${result.error}`);
