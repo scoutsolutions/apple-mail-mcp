@@ -13,6 +13,8 @@
  * @module services/appleMailManager
  */
 
+import { existsSync } from "fs";
+import { isAbsolute } from "path";
 import { executeAppleScript } from "@/utils/applescript.js";
 import type {
   Message,
@@ -48,6 +50,31 @@ import type {
 function escapeForAppleScript(text: string): string {
   if (!text) return "";
   return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/**
+ * Validates attachment file paths and builds AppleScript commands to attach them.
+ *
+ * @param attachments - Absolute file paths to attach
+ * @returns AppleScript commands to add attachments, or empty string if none
+ * @throws Error if any path is not absolute or does not exist
+ */
+function buildAttachmentCommands(attachments?: string[]): string {
+  if (!attachments || attachments.length === 0) return "";
+  for (const filePath of attachments) {
+    if (!isAbsolute(filePath)) {
+      throw new Error(`Attachment path must be absolute: "${filePath}"`);
+    }
+    if (!existsSync(filePath)) {
+      throw new Error(`Attachment file not found: "${filePath}"`);
+    }
+  }
+  let commands = "";
+  for (const filePath of attachments) {
+    const safePath = escapeForAppleScript(filePath);
+    commands += `make new attachment with properties {file name:POSIX file "${safePath}"} at after the last paragraph\n`;
+  }
+  return commands;
 }
 
 /**
@@ -617,7 +644,8 @@ export class AppleMailManager {
     body: string,
     cc?: string[],
     bcc?: string[],
-    account?: string
+    account?: string,
+    attachments?: string[]
   ): boolean {
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScript(body);
@@ -638,6 +666,8 @@ export class AppleMailManager {
       }
     }
 
+    const attachmentCommands = buildAttachmentCommands(attachments);
+
     let sendCommand: string;
     if (account) {
       const safeAccount = escapeForAppleScript(account);
@@ -646,6 +676,7 @@ export class AppleMailManager {
         tell newMessage
           ${recipientCommands}
           set sender to "${safeAccount}"
+          ${attachmentCommands}
         end tell
         send newMessage
         return "sent"
@@ -655,6 +686,7 @@ export class AppleMailManager {
         set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:true}
         tell newMessage
           ${recipientCommands}
+          ${attachmentCommands}
         end tell
         send newMessage
         return "sent"
@@ -689,7 +721,8 @@ export class AppleMailManager {
     body: string,
     cc?: string[],
     bcc?: string[],
-    account?: string
+    account?: string,
+    attachments?: string[]
   ): boolean {
     const safeSubject = escapeForAppleScript(subject);
     const safeBody = escapeForAppleScript(body);
@@ -710,6 +743,8 @@ export class AppleMailManager {
       }
     }
 
+    const attachmentCommands = buildAttachmentCommands(attachments);
+
     let draftCommand: string;
     if (account) {
       const safeAccount = escapeForAppleScript(account);
@@ -718,6 +753,7 @@ export class AppleMailManager {
         tell newMessage
           ${recipientCommands}
           set sender to "${safeAccount}"
+          ${attachmentCommands}
         end tell
         return "draft created"
       `;
@@ -726,6 +762,7 @@ export class AppleMailManager {
         set newMessage to make new outgoing message with properties {subject:"${safeSubject}", content:"${safeBody}", visible:false}
         tell newMessage
           ${recipientCommands}
+          ${attachmentCommands}
         end tell
         return "draft created"
       `;
