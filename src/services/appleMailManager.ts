@@ -13,6 +13,7 @@
  * @module services/appleMailManager
  */
 
+import { spawnSync } from "child_process";
 import { existsSync } from "fs";
 import { isAbsolute } from "path";
 import { executeAppleScript } from "@/utils/applescript.js";
@@ -31,6 +32,8 @@ import type {
   MailRule,
   Contact,
   EmailTemplate,
+  SerialEmailRecipient,
+  SerialEmailResult,
 } from "@/types.js";
 
 // =============================================================================
@@ -702,6 +705,73 @@ export class AppleMailManager {
     }
 
     return result.output.includes("sent");
+  }
+
+  /**
+   * Send individual personalized emails to a list of recipients (mail merge).
+   *
+   * Replaces {{placeholder}} tokens in subject and body with per-recipient values.
+   * Each recipient receives their own individual email.
+   *
+   * @param recipients - List of recipient objects with email and variable values
+   * @param subject - Email subject (may contain {{placeholders}})
+   * @param body - Email body (may contain {{placeholders}})
+   * @param account - Account to send from
+   * @param delayMs - Delay between sends in milliseconds (default: 500, max: 10000)
+   * @returns Array of per-recipient results
+   */
+  sendSerialEmail(
+    recipients: SerialEmailRecipient[],
+    subject: string,
+    body: string,
+    account?: string,
+    delayMs: number = 500
+  ): SerialEmailResult[] {
+    const effectiveDelay = Math.min(Math.max(delayMs, 0), 10000);
+    const results: SerialEmailResult[] = [];
+
+    for (let i = 0; i < recipients.length; i++) {
+      const recipient = recipients[i];
+      try {
+        // Replace all {{Key}} placeholders with recipient's values
+        let personalizedSubject = subject;
+        let personalizedBody = body;
+        for (const [key, value] of Object.entries(recipient.variables)) {
+          const safeKey = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const placeholder = new RegExp(`\\{\\{${safeKey}\\}\\}`, "g");
+          personalizedSubject = personalizedSubject.replace(placeholder, value);
+          personalizedBody = personalizedBody.replace(placeholder, value);
+        }
+
+        const success = this.sendEmail(
+          [recipient.email],
+          personalizedSubject,
+          personalizedBody,
+          undefined,
+          undefined,
+          account
+        );
+
+        results.push({
+          email: recipient.email,
+          success,
+          error: success ? undefined : "Failed to send email",
+        });
+      } catch (error) {
+        results.push({
+          email: recipient.email,
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+
+      // Brief delay between sends to avoid overwhelming Mail.app
+      if (effectiveDelay > 0 && i < recipients.length - 1) {
+        spawnSync("sleep", [(effectiveDelay / 1000).toString()], { stdio: "ignore" });
+      }
+    }
+
+    return results;
   }
 
   /**
