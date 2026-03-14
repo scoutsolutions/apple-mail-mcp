@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-14
+
+### Added
+- **send-serial-email** - Mail merge tool: send personalized emails to multiple recipients with `{{placeholder}}` token support (max 100 recipients per batch) (PR #3 by @michaelhenze)
+- **File attachments** - `send-email` and `create-draft` now accept an optional `attachments` parameter (array of absolute file paths) (PR #2 by @michaelhenze)
+
+### Fixed
+- **Locale-independent date parsing** - Dates now display correctly on non-English macOS systems (e.g., German). Previously, locale-dependent date strings could cause all emails to show the current date instead of actual received date (PR #4 by @michaelhenze)
+- **Send/draft timeout resilience** - Increased timeout from 30s to 60s and enabled automatic retry with exponential backoff for `send-email` and `create-draft`, preventing failures when Mail.app is slow to establish SMTP connections
+
+### Improved
+- Attachment paths are validated (must be absolute, must exist) before sending — provides clear error messages instead of cryptic AppleScript failures
+- `send-serial-email` uses `spawnSync("sleep")` instead of CPU-burning busy-wait between sends
+- `send-serial-email` enforces safety limits: max 100 recipients, max 10s delay between sends
+
+## [1.1.1] - 2026-03-10
+
+### Fixed
+- TTL cache for account and mailbox name resolution to reduce redundant AppleScript calls
+
+## [1.1.0] - 2026-03-09
+
+### Added
+- **Batch operations** - `batch-mark-as-unread`, `batch-flag-messages`, `batch-unflag-messages`
+- **Mailbox management** - `create-mailbox`, `delete-mailbox`, `rename-mailbox`
+- **Mail rules** - `list-rules`, `enable-rule`, `disable-rule`
+- **Contacts** - `search-contacts` (Contacts.app integration)
+- **Email templates** - `save-template`, `list-template`, `get-template`, `delete-template`, `use-template`
+- **save-attachment** - Download attachments to disk
+- **HTML content** - `preferHtml` option in `get-message`
+- Date received in search/list output
+- Sender filter and pagination (`from`, `offset`) for `list-messages`
+- Date range filtering (`dateFrom`, `dateTo`) for `search-messages`
+- Cross-account search when no account specified
+- Exposed `unflag-message` tool (was implemented but not wired up)
+
+### Fixed
+- Use Mail.app's configured default send account instead of hardcoded fallback (PR #1 by @Leewonchan14)
+- Add message ID to search and list results (PR #1 by @Leewonchan14)
+
 ## [1.0.0] - 2026-01-06
 
 First stable release with full Apple Mail integration.

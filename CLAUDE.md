@@ -84,7 +84,16 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 
 - Use `send-email` for immediate sending
 - Use `create-draft` when the user should review first
+- Both support optional `attachments` parameter (array of absolute file paths)
 - **Recommendation**: For important emails, use `create-draft` and tell the user to review in Mail.app
+
+### send-serial-email (mail merge)
+
+- Sends individual personalized emails to a list of recipients
+- Use `{{placeholder}}` tokens in subject and body, replaced per-recipient
+- Each recipient gets their own email — recipients don't see each other
+- Max 100 recipients per batch, delay between sends (default 500ms, max 10s)
+- Example variables: `{ "Name": "Alice", "Company": "Acme" }`
 
 ### reply-to-message
 
@@ -220,6 +229,25 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 3. use-template id="tmpl_1" → create draft from template
 4. use-template id="tmpl_1" to=["other@..."] → override recipients
    Note: templates are stored in memory and reset when the server restarts
+```
+
+### Send email with attachments
+
+```text
+1. send-email to=["colleague@company.com"] subject="Report" body="See attached." attachments=["/Users/me/report.pdf"]
+   OR to let the user review first:
+2. create-draft to=["colleague@company.com"] subject="Report" body="See attached." attachments=["/Users/me/report.pdf"]
+   Note: attachment paths must be absolute and the files must exist
+```
+
+### Send personalized emails (mail merge)
+
+```text
+1. send-serial-email recipients=[
+     {"email": "alice@acme.com", "variables": {"Name": "Alice", "Company": "Acme"}},
+     {"email": "bob@globex.com", "variables": {"Name": "Bob", "Company": "Globex"}}
+   ] subject="Hello {{Name}}" body="Great to connect about {{Company}}."
+   Each recipient gets their own individual email with placeholders replaced.
 ```
 
 ### Check mail sync status
