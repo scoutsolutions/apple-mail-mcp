@@ -51,16 +51,38 @@ function escapeForAppleScript(text: string): string {
 }
 
 /**
- * Parses AppleScript date representation to JavaScript Date.
+ * AppleScript snippet that converts a date variable `d` into a
+ * locale-independent numeric string: "YYYY-M-D-H-m-s".
+ * Use: set d to date received of msg, then inline this snippet.
+ */
+const AS_DATE_TO_STRING = `((year of d) as string) & "-" & ((month of d as integer) as string) & "-" & ((day of d) as string) & "-" & ((hours of d) as string) & "-" & ((minutes of d) as string) & "-" & ((seconds of d) as string)`;
+
+/**
+ * Parses a locale-independent date string "YYYY-M-D-H-m-s"
+ * produced by the AppleScript snippet above.
  *
- * AppleScript returns dates in a verbose format like:
- * "date Saturday, December 27, 2025 at 3:44:02 PM"
+ * Falls back to the locale-dependent `as string` format for
+ * backwards compatibility, and finally to current date.
  *
- * @param appleScriptDate - Date string from AppleScript
+ * @param dateStr - Date string from AppleScript
  * @returns Parsed Date, or current date if parsing fails
  */
-function parseAppleScriptDate(appleScriptDate: string): Date {
-  const withoutPrefix = appleScriptDate.replace(/^date\s+/, "");
+function parseAppleScriptDate(dateStr: string): Date {
+  // Try locale-independent numeric format first: "YYYY-M-D-H-m-s"
+  const numParts = dateStr.split("-").map(Number);
+  if (numParts.length === 6 && numParts.every((n) => !isNaN(n))) {
+    return new Date(
+      numParts[0],
+      numParts[1] - 1,
+      numParts[2],
+      numParts[3],
+      numParts[4],
+      numParts[5]
+    );
+  }
+
+  // Fallback: try legacy locale-dependent format
+  const withoutPrefix = dateStr.replace(/^date\s+/, "");
   const normalized = withoutPrefix.replace(" at ", " ");
   const parsed = new Date(normalized);
   return isNaN(parsed.getTime()) ? new Date() : parsed;
@@ -347,7 +369,8 @@ export class AppleMailManager {
           set msgId to id of msg as string
           set msgSubject to subject of msg
           set msgSender to sender of msg
-          set msgDateStr to date received of msg as string
+          set d to date received of msg
+          set msgDateStr to ${AS_DATE_TO_STRING}
           set msgRead to read status of msg as string
           set msgFlagged to flagged status of msg as string
           if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
@@ -389,7 +412,8 @@ export class AppleMailManager {
                 set msg to item 1 of matchingMsgs
                 set msgSubject to subject of msg
                 set msgSender to sender of msg
-                set msgDate to date received of msg as string
+                set d to date received of msg
+                set msgDate to ${AS_DATE_TO_STRING}
                 set msgRead to read status of msg as string
                 set msgFlagged to flagged status of msg as string
                 set msgJunk to junk mail status of msg as string
@@ -520,7 +544,8 @@ export class AppleMailManager {
             set msgId to id of msg as string
             set msgSubject to subject of msg
             set msgSender to sender of msg
-            set msgDate to date received of msg as string
+            set d to date received of msg
+            set msgDate to ${AS_DATE_TO_STRING}
             set msgRead to read status of msg as string
             set msgFlagged to flagged status of msg as string
             if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
