@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **Message ID validation** - Message IDs are now validated as numeric-only (`/^\d+$/`) to prevent injection attacks
+- **Batch size cap** - Batch operations are limited to a maximum of 100 messages per request
+- **Date filter validation** - Date filters are validated to allow only alphanumeric characters and safe punctuation; an additional belt-and-suspenders `escapeForAppleScript()` call is applied before interpolation
+- **Attachment save path traversal prevention** - `save-attachment` uses `path.resolve` and restricts save paths to the user's home directory, `/tmp`, `/private/tmp`, and `/Volumes`; attachment names containing `/`, `\`, null bytes, or `..` are rejected
+- **Defense-in-depth ID coercion** - All AppleScript message ID interpolations now use `Number(id)` as an extra safeguard
+- **Attachment count limit** - `send-email` and `create-draft` enforce a maximum of 20 file attachments
+
+### Added
+- **Security test suite** - `src/security.test.ts` with unit tests for all input validation schemas and path traversal prevention
+- **Integration test suite** - `test/integration.test.ts` for live Mail.app testing
+- **New npm scripts** - `test:integration` and `test:all` for running integration and combined test suites
+
 ## [1.2.0] - 2026-03-14
 
 ### Added

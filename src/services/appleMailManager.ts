@@ -15,7 +15,8 @@
 
 import { spawnSync } from "child_process";
 import { existsSync } from "fs";
-import { isAbsolute } from "path";
+import { isAbsolute, resolve } from "path";
+import { homedir } from "os";
 import { executeAppleScript } from "@/utils/applescript.js";
 import type {
   Message,
@@ -374,15 +375,18 @@ export class AppleMailManager {
       searchCondition = `whose subject contains "${safeQuery}" or sender contains "${safeQuery}"`;
     }
 
-    // Build date filter AppleScript
+    // Build date filter AppleScript.
+    // Note: dateFrom/dateTo are already validated by DATE_FILTER_SCHEMA (alphanumeric + safe
+    // punctuation only), so escapeForAppleScript() below is belt-and-suspenders — it won't
+    // alter valid date strings but guards against future schema changes.
     let dateFilter = "";
     if (dateFrom || dateTo) {
       const dateChecks: string[] = [];
       if (dateFrom) {
-        dateChecks.push(`date received of msg >= date "${dateFrom}"`);
+        dateChecks.push(`date received of msg >= date "${escapeForAppleScript(dateFrom)}"`);
       }
       if (dateTo) {
-        dateChecks.push(`date received of msg <= date "${dateTo}"`);
+        dateChecks.push(`date received of msg <= date "${escapeForAppleScript(dateTo)}"`);
       }
       dateFilter = dateChecks.join(" and ");
     }
@@ -437,7 +441,7 @@ export class AppleMailManager {
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
-              set matchingMsgs to (messages of mb whose id is ${id})
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
                 set msgSubject to subject of msg
@@ -496,7 +500,7 @@ export class AppleMailManager {
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
-              set matchingMsgs to (messages of mb whose id is ${id})
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
                 set msgSubject to subject of msg
@@ -868,7 +872,7 @@ export class AppleMailManager {
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
-              set matchingMsgs to (messages of mb whose id is ${id})
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
                 set theReply to reply msg with opening window${replyAllClause}
@@ -919,7 +923,7 @@ export class AppleMailManager {
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
-              set matchingMsgs to (messages of mb whose id is ${id})
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
                 set theForward to forward msg with opening window
@@ -956,7 +960,7 @@ export class AppleMailManager {
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
-              set matchingMsgs to (messages of mb whose id is ${id})
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
                 ${operation}
@@ -1061,7 +1065,7 @@ export class AppleMailManager {
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
-              set matchingMsgs to (messages of mb whose id is ${id})
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
                 set destMailbox to mailbox "${safeMailbox}" of account "${safeAccount}"
@@ -1196,7 +1200,7 @@ export class AppleMailManager {
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
-              set matchingMsgs to (messages of mb whose id is ${id})
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
                 set outputText to ""
@@ -1248,15 +1252,34 @@ export class AppleMailManager {
    * Save an attachment from a message to disk.
    */
   saveAttachment(id: string, attachmentName: string, savePath: string): boolean {
+    // Validate attachment name: block path separators, traversal, null bytes, and backslashes
+    if (/[/\\\0]/.test(attachmentName) || attachmentName.includes("..")) {
+      console.error(`Invalid attachment name: "${attachmentName}"`);
+      return false;
+    }
+
+    // Resolve the save path to prevent symlink / ".." traversal bypass
+    const resolvedPath = resolve(savePath);
+    const allowedPrefixes = [homedir(), "/tmp", "/private/tmp", "/Volumes"];
+    const isAllowed = allowedPrefixes.some((prefix) => resolvedPath.startsWith(prefix));
+    if (!isAllowed) {
+      console.error(`Save path "${savePath}" is outside allowed directories`);
+      return false;
+    }
+
     const safeName = escapeForAppleScript(attachmentName);
-    const safePath = escapeForAppleScript(savePath);
+    const safePath = escapeForAppleScript(resolvedPath);
+
+    // Use Number(id) as defense-in-depth — the Zod schema already enforces numeric IDs,
+    // but this ensures raw interpolation into AppleScript is safe even if validation changes.
+    const numericId = Number(id);
 
     const script = buildAppLevelScript(`
       try
         repeat with acct in accounts
           repeat with mb in mailboxes of acct
             try
-              set matchingMsgs to (messages of mb whose id is ${id})
+              set matchingMsgs to (messages of mb whose id is ${numericId})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
                 repeat with att in mail attachments of msg

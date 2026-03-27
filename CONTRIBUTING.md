@@ -48,18 +48,30 @@ npm run format:check
 All new features should include tests. We use Vitest for testing.
 
 ```bash
-# Run tests once
+# Run unit tests
 npm test
 
 # Run tests in watch mode
 npm run test:watch
+
+# Run integration tests (requires macOS with Mail.app configured)
+npm run test:integration
+
+# Run all tests (unit + integration)
+npm run test:all
 ```
+
+### Test File Locations
+
+- **Unit tests:** `src/services/appleMailManager.test.ts` (core logic), `src/security.test.ts` (input validation and security schemas)
+- **Integration tests:** `test/integration.test.ts` (live Mail.app interaction)
 
 ### Testing Guidelines
 
 - Tests mock the `executeAppleScript` function since AppleScript only works on macOS
 - Test both success and failure paths
 - Test edge cases (empty strings, special characters, etc.)
+- Security-sensitive changes should include tests in `src/security.test.ts`
 
 ## Pull Request Process
 
