@@ -26,6 +26,30 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { AppleMailManager } from "@/services/appleMailManager.js";
 
+// =============================================================================
+// Shared Validation Schemas
+// =============================================================================
+
+/** Message IDs in Apple Mail are always numeric. Enforce this at the schema level
+ *  to prevent AppleScript injection via the `whose id is ${id}` interpolation. */
+const MESSAGE_ID_SCHEMA = z.string().regex(/^\d+$/, "Message ID must be numeric");
+
+/** Batch operations are capped to prevent unbounded loops / DoS. */
+const BATCH_IDS_SCHEMA = z
+  .array(MESSAGE_ID_SCHEMA)
+  .min(1, "At least one message ID is required")
+  .max(100, "Cannot process more than 100 messages in a single batch");
+
+/** Date filter strings must look like natural-language dates (e.g. "March 1, 2026").
+ *  Block characters that could escape an AppleScript `date "..."` literal. */
+const DATE_FILTER_SCHEMA = z
+  .string()
+  .regex(
+    /^[a-zA-Z0-9 ,/\-:]+$/,
+    "Date must contain only alphanumeric characters, spaces, commas, slashes, hyphens, and colons"
+  )
+  .optional();
+
 // Read version from package.json to keep it in sync
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
@@ -105,8 +129,8 @@ server.tool(
     account: z.string().optional().describe("Account to search in (omit to search all accounts)"),
     isRead: z.boolean().optional().describe("Filter by read status"),
     isFlagged: z.boolean().optional().describe("Filter by flagged status"),
-    dateFrom: z.string().optional().describe("Start date filter (e.g., 'January 1, 2026')"),
-    dateTo: z.string().optional().describe("End date filter (e.g., 'March 1, 2026')"),
+    dateFrom: DATE_FILTER_SCHEMA.describe("Start date filter (e.g., 'January 1, 2026')"),
+    dateTo: DATE_FILTER_SCHEMA.describe("End date filter (e.g., 'March 1, 2026')"),
     limit: z.number().optional().describe("Maximum number of results (default: 50)"),
   },
   withErrorHandling(({ query, mailbox, account, limit = 50, dateFrom, dateTo }) => {
@@ -132,7 +156,7 @@ server.tool(
 server.tool(
   "get-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
     preferHtml: z.boolean().optional().describe("Return HTML source instead of plain text"),
   },
   withErrorHandling(({ id, preferHtml }) => {
@@ -193,6 +217,7 @@ server.tool(
     account: z.string().optional().describe("Account to send from"),
     attachments: z
       .array(z.string())
+      .max(20, "Cannot attach more than 20 files")
       .optional()
       .describe("Absolute file paths to attach (e.g., ['/Users/me/report.pdf'])"),
   },
@@ -275,6 +300,7 @@ server.tool(
     account: z.string().optional().describe("Account to create draft in"),
     attachments: z
       .array(z.string())
+      .max(20, "Cannot attach more than 20 files")
       .optional()
       .describe("Absolute file paths to attach (e.g., ['/Users/me/report.pdf'])"),
   },
@@ -295,7 +321,7 @@ server.tool(
 server.tool(
   "reply-to-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
     body: z.string().min(1, "Reply body is required"),
     replyAll: z.boolean().optional().default(false).describe("Reply to all recipients"),
     send: z.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),
@@ -316,7 +342,7 @@ server.tool(
 server.tool(
   "forward-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
     to: z.array(z.string()).min(1, "At least one recipient is required"),
     body: z.string().optional().describe("Optional message to prepend"),
     send: z.boolean().optional().default(true).describe("Send immediately (false = save as draft)"),
@@ -339,7 +365,7 @@ server.tool(
 server.tool(
   "mark-as-read",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const success = mailManager.markAsRead(id);
@@ -357,7 +383,7 @@ server.tool(
 server.tool(
   "mark-as-unread",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const success = mailManager.markAsUnread(id);
@@ -375,7 +401,7 @@ server.tool(
 server.tool(
   "flag-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const success = mailManager.flagMessage(id);
@@ -393,7 +419,7 @@ server.tool(
 server.tool(
   "unflag-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const success = mailManager.unflagMessage(id);
@@ -411,7 +437,7 @@ server.tool(
 server.tool(
   "delete-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const success = mailManager.deleteMessage(id);
@@ -429,7 +455,7 @@ server.tool(
 server.tool(
   "move-message",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
     mailbox: z.string().min(1, "Destination mailbox is required"),
     account: z.string().optional().describe("Account containing the destination mailbox"),
   },
@@ -449,7 +475,7 @@ server.tool(
 server.tool(
   "batch-delete-messages",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
   },
   withErrorHandling(({ ids }) => {
     const results = mailManager.batchDeleteMessages(ids);
@@ -471,7 +497,7 @@ server.tool(
 server.tool(
   "batch-move-messages",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
     mailbox: z.string().min(1, "Destination mailbox is required"),
     account: z.string().optional().describe("Account containing the destination mailbox"),
   },
@@ -497,7 +523,7 @@ server.tool(
 server.tool(
   "batch-mark-as-read",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
   },
   withErrorHandling(({ ids }) => {
     const results = mailManager.batchMarkAsRead(ids);
@@ -519,7 +545,7 @@ server.tool(
 server.tool(
   "batch-mark-as-unread",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
   },
   withErrorHandling(({ ids }) => {
     const results = mailManager.batchMarkAsUnread(ids);
@@ -541,7 +567,7 @@ server.tool(
 server.tool(
   "batch-flag-messages",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
   },
   withErrorHandling(({ ids }) => {
     const results = mailManager.batchFlagMessages(ids);
@@ -563,7 +589,7 @@ server.tool(
 server.tool(
   "batch-unflag-messages",
   {
-    ids: z.array(z.string()).min(1, "At least one message ID is required"),
+    ids: BATCH_IDS_SCHEMA,
   },
   withErrorHandling(({ ids }) => {
     const results = mailManager.batchUnflagMessages(ids);
@@ -585,7 +611,7 @@ server.tool(
 server.tool(
   "list-attachments",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
   },
   withErrorHandling(({ id }) => {
     const attachments = mailManager.listAttachments(id);
@@ -610,7 +636,7 @@ server.tool(
 server.tool(
   "save-attachment",
   {
-    id: z.string().min(1, "Message ID is required"),
+    id: MESSAGE_ID_SCHEMA,
     attachmentName: z.string().min(1, "Attachment name is required"),
     savePath: z.string().min(1, "Save directory path is required"),
   },

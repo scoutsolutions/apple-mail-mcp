@@ -191,7 +191,7 @@ Send a new email immediately.
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Send from specific account |
-| `attachments` | string[] | No | Absolute file paths to attach (e.g., `["/Users/me/report.pdf"]`) |
+| `attachments` | string[] | No | Absolute file paths to attach, max 20 files (e.g., `["/Users/me/report.pdf"]`) |
 
 **Example:**
 ```json
@@ -212,11 +212,11 @@ Send individual personalized emails to a list of recipients (mail merge). Each r
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `recipients` | object[] | Yes | List of recipients (see below) |
+| `recipients` | object[] | Yes | List of recipients, max 100 (see below) |
 | `subject` | string | Yes | Email subject — use `{{Key}}` for placeholders |
 | `body` | string | Yes | Email body — use `{{Key}}` for placeholders |
 | `account` | string | No | Send from specific account |
-| `delayMs` | number | No | Delay between sends in ms (default: 500) |
+| `delayMs` | number | No | Delay between sends in ms (default: 500, max 10000) |
 
 Each recipient object:
 
@@ -253,7 +253,7 @@ Save an email to Drafts without sending.
 | `cc` | string[] | No | CC recipients |
 | `bcc` | string[] | No | BCC recipients |
 | `account` | string | No | Account for draft |
-| `attachments` | string[] | No | Absolute file paths to attach |
+| `attachments` | string[] | No | Absolute file paths to attach, max 20 files |
 
 **Returns:** Confirmation that draft was created.
 
@@ -371,19 +371,19 @@ Save a message attachment to disk.
 
 ### Batch Operations
 
-All batch operations accept an array of message IDs and return per-item success/failure results.
+All batch operations accept an array of message IDs (max 100 per batch) and return per-item success/failure results.
 
 #### `batch-delete-messages`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `ids` | string[] | Yes | Message IDs to delete |
+| `ids` | string[] | Yes | Message IDs to delete (max 100) |
 
 #### `batch-move-messages`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `ids` | string[] | Yes | Message IDs to move |
+| `ids` | string[] | Yes | Message IDs to move (max 100) |
 | `mailbox` | string | Yes | Destination mailbox |
 | `account` | string | No | Account containing mailbox |
 
@@ -391,13 +391,13 @@ All batch operations accept an array of message IDs and return per-item success/
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `ids` | string[] | Yes | Message IDs |
+| `ids` | string[] | Yes | Message IDs (max 100) |
 
 #### `batch-flag-messages` / `batch-unflag-messages`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `ids` | string[] | Yes | Message IDs |
+| `ids` | string[] | Yes | Message IDs (max 100) |
 
 ---
 
@@ -718,6 +718,11 @@ If installed from source, use this configuration:
 | Attachments require absolute paths | File attachments must use full absolute paths (e.g., `/Users/me/file.pdf`) |
 | No smart mailboxes | Cannot access Smart Mailboxes via AppleScript |
 | In-memory templates | Email templates are not persisted across server restarts |
+| Numeric-only message IDs | Message IDs must contain only digits (validated by schema) |
+| Batch size cap | Batch operations are limited to 100 messages per request |
+| Date filter format | Date filters accept alphanumeric characters and safe punctuation only |
+| Attachment save path restrictions | `save-attachment` only allows saving to home directory, `/tmp`, `/private/tmp`, and `/Volumes`; path traversal is blocked |
+| Attachment count limit | `send-email` and `create-draft` accept a maximum of 20 file attachments |
 
 ### Backslash Escaping (Important for AI Agents)
 
@@ -776,11 +781,13 @@ The `\\\\` in JSON becomes `\\` in the actual string, which represents a single 
 ## Development
 
 ```bash
-npm install      # Install dependencies
-npm run build    # Compile TypeScript
-npm test         # Run test suite (28 tests)
-npm run lint     # Check code style
-npm run format   # Format code
+npm install            # Install dependencies
+npm run build          # Compile TypeScript
+npm test               # Run unit tests
+npm run test:integration  # Run integration tests (requires Mail.app)
+npm run test:all       # Run all tests (unit + integration)
+npm run lint           # Check code style
+npm run format         # Format code
 ```
 
 ---
