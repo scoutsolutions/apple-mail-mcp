@@ -22,6 +22,9 @@ const DATE_FILTER_SCHEMA = z
     /^[a-zA-Z0-9 ,/\-:]+$/,
     "Date must contain only alphanumeric characters, spaces, commas, slashes, hyphens, and colons"
   )
+  .refine((val) => !isNaN(new Date(val).getTime()), {
+    message: "Date string must be a valid date (e.g., 'January 1, 2026' or '2026-03-15')",
+  })
   .optional();
 
 describe("MESSAGE_ID_SCHEMA", () => {
@@ -95,6 +98,12 @@ describe("DATE_FILTER_SCHEMA", () => {
 
   it("rejects strings with parentheses", () => {
     expect(() => DATE_FILTER_SCHEMA.parse("date(2026)")).toThrow();
+  });
+
+  it("rejects non-parseable date strings", () => {
+    expect(() => DATE_FILTER_SCHEMA.parse("31")).toThrow();
+    expect(() => DATE_FILTER_SCHEMA.parse("abc")).toThrow();
+    expect(() => DATE_FILTER_SCHEMA.parse("1234567890")).toThrow();
   });
 });
 
