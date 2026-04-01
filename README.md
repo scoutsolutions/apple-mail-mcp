@@ -139,7 +139,7 @@ Search for messages matching criteria. Searches all accounts by default.
 | `query` | string | No | Text to search in subject/sender |
 | `from` | string | No | Filter by sender email address |
 | `subject` | string | No | Filter by subject line |
-| `mailbox` | string | No | Mailbox to search in (default: INBOX) |
+| `mailbox` | string | No | Mailbox to search in (omit to search all mailboxes) |
 | `account` | string | No | Account to search in (omit to search all accounts) |
 | `isRead` | boolean | No | Filter by read status |
 | `isFlagged` | boolean | No | Filter by flagged status |
@@ -168,7 +168,7 @@ List messages in a mailbox.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `mailbox` | string | No | Mailbox name (default: INBOX) |
+| `mailbox` | string | No | Mailbox name (omit to list from all mailboxes) |
 | `account` | string | No | Account name |
 | `limit` | number | No | Max messages (default: 50) |
 | `offset` | number | No | Number of messages to skip (for pagination) |
@@ -608,12 +608,12 @@ Check Mail.app sync activity.
 
 ```
 User: "Check my inbox for new emails"
-AI: [calls list-messages with mailbox="INBOX"]
-    "You have 12 messages in your inbox. Here are the most recent..."
+AI: [calls list-messages]
+    "You have 12 messages. Here are the most recent..."
 
 User: "Show me emails from Sarah"
 AI: [calls search-messages with query="Sarah"]
-    "Found 3 emails from Sarah..."
+    "Found 3 emails from Sarah across all mailboxes..."
 
 User: "Read the first one"
 AI: [calls get-message with id="..."]
@@ -720,7 +720,7 @@ If installed from source, use this configuration:
 | In-memory templates | Email templates are not persisted across server restarts |
 | Numeric-only message IDs | Message IDs must contain only digits (validated by schema) |
 | Batch size cap | Batch operations are limited to 100 messages per request |
-| Date filter format | Date filters accept alphanumeric characters and safe punctuation only |
+| Date filter format | Date filters must be valid parseable dates (e.g., "January 1, 2026" or "2026-03-15"); bare numbers or non-date strings are rejected |
 | Attachment save path restrictions | `save-attachment` only allows saving to home directory, `/tmp`, `/private/tmp`, and `/Volumes`; path traversal is blocked |
 | Attachment count limit | `send-email` and `create-draft` accept a maximum of 20 file attachments |
 
