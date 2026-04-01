@@ -125,7 +125,10 @@ server.tool(
     query: z.string().optional().describe("Text to search for in subject, sender, or content"),
     from: z.string().optional().describe("Filter by sender email address"),
     subject: z.string().optional().describe("Filter by subject line"),
-    mailbox: z.string().optional().describe("Mailbox to search in (e.g., 'INBOX')"),
+    mailbox: z
+      .string()
+      .optional()
+      .describe("Mailbox to search in (e.g., 'INBOX'). Omit to search all mailboxes."),
     account: z.string().optional().describe("Account to search in (omit to search all accounts)"),
     isRead: z.boolean().optional().describe("Filter by read status"),
     isFlagged: z.boolean().optional().describe("Filter by flagged status"),
@@ -179,7 +182,10 @@ server.tool(
 server.tool(
   "list-messages",
   {
-    mailbox: z.string().optional().describe("Mailbox to list messages from (default: INBOX)"),
+    mailbox: z
+      .string()
+      .optional()
+      .describe("Mailbox to list messages from. Omit to list from all mailboxes."),
     account: z.string().optional().describe("Account to list messages from"),
     limit: z.number().optional().describe("Maximum number of messages (default: 50)"),
     offset: z.number().optional().describe("Number of messages to skip (for pagination)"),

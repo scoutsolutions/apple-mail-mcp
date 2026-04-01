@@ -365,8 +365,6 @@ export class AppleMailManager {
     }
 
     const targetAccount = this.resolveAccount(account);
-    const requestedMailbox = mailbox || "INBOX";
-    const targetMailbox = this.resolveMailbox(requestedMailbox, targetAccount);
 
     // Build the search condition
     let searchCondition = "";
@@ -391,7 +389,13 @@ export class AppleMailManager {
       dateFilter = dateChecks.join(" and ");
     }
 
-    const searchCommand = `
+    let searchCommand: string;
+
+    if (mailbox) {
+      // Search a specific mailbox
+      const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
+
+      searchCommand = `
       set outputText to ""
       set theMailbox to mailbox "${escapeForAppleScript(targetMailbox)}"
       set allMessages to messages of theMailbox ${searchCondition}
@@ -415,6 +419,41 @@ export class AppleMailManager {
       end repeat
       return outputText
     `;
+    } else {
+      // Search ALL mailboxes — iterate every mailbox in the account, dedup by message ID
+      searchCommand = `
+      set outputText to ""
+      set msgCount to 0
+      set seenIds to {}
+      repeat with mb in mailboxes
+        if msgCount >= ${limit} then exit repeat
+        try
+          set allMessages to messages of mb ${searchCondition}
+          repeat with msg in allMessages
+            if msgCount >= ${limit} then exit repeat
+            try
+              set msgId to id of msg as string
+              if seenIds does not contain msgId then
+                set end of seenIds to msgId
+                ${dateFilter ? `set msgDate to date received of msg\n                if not (${dateFilter}) then\n                  -- skip message outside date range\n                else` : ""}
+                set msgSubject to subject of msg
+                set msgSender to sender of msg
+                set d to date received of msg
+                set msgDateStr to ${AS_DATE_TO_STRING}
+                set msgRead to read status of msg as string
+                set msgFlagged to flagged status of msg as string
+                if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
+                set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDateStr & "|||" & msgRead & "|||" & msgFlagged & "|||" & name of mb
+                set msgCount to msgCount + 1
+                ${dateFilter ? "end if" : ""}
+              end if
+            end try
+          end repeat
+        end try
+      end repeat
+      return outputText
+    `;
+    }
 
     const script = buildAccountScopedScript(targetAccount, searchCommand);
     const result = executeAppleScript(script, { timeoutMs: 60000 });
@@ -426,7 +465,7 @@ export class AppleMailManager {
 
     if (!result.output.trim()) return [];
 
-    return this.parseMessageList(result.output, targetMailbox, targetAccount);
+    return this.parseMessageList(result.output, mailbox || "INBOX", targetAccount);
   }
 
   /**
@@ -557,14 +596,31 @@ export class AppleMailManager {
     from?: string,
     offset = 0
   ): Message[] {
+    // If no account specified, list across all accounts
+    if (!account) {
+      const accounts = this.listAccounts();
+      const allMessages: Message[] = [];
+      for (const acct of accounts) {
+        if (allMessages.length >= limit) break;
+        const remaining = limit - allMessages.length;
+        const msgs = this.listMessages(mailbox, acct.name, remaining, from, offset);
+        allMessages.push(...msgs);
+      }
+      return allMessages.slice(0, limit);
+    }
+
     const targetAccount = this.resolveAccount(account);
-    const requestedMailbox = mailbox || "INBOX";
-    const targetMailbox = this.resolveMailbox(requestedMailbox, targetAccount);
 
     const safeFrom = from ? escapeForAppleScript(from) : "";
     const fromFilter = from ? `whose sender contains "${safeFrom}"` : "";
 
-    const listCommand = `
+    let listCommand: string;
+
+    if (mailbox) {
+      // List from a specific mailbox
+      const targetMailbox = this.resolveMailbox(mailbox, targetAccount);
+
+      listCommand = `
       set outputText to ""
       set theMailbox to mailbox "${escapeForAppleScript(targetMailbox)}"
       set msgCount to 0
@@ -590,9 +646,46 @@ export class AppleMailManager {
       end repeat
       return outputText
     `;
+    } else {
+      // List from ALL mailboxes — iterate every mailbox in the account, dedup by message ID
+      listCommand = `
+      set outputText to ""
+      set msgCount to 0
+      set skipped to 0
+      set seenIds to {}
+      repeat with mb in mailboxes
+        if msgCount >= ${limit} then exit repeat
+        try
+          repeat with msg in messages of mb ${fromFilter}
+            if msgCount >= ${limit} then exit repeat
+            try
+              set msgId to id of msg as string
+              if seenIds does not contain msgId then
+                set end of seenIds to msgId
+                if skipped < ${offset} then
+                  set skipped to skipped + 1
+                else
+                  set msgSubject to subject of msg
+                  set msgSender to sender of msg
+                  set d to date received of msg
+                  set msgDate to ${AS_DATE_TO_STRING}
+                  set msgRead to read status of msg as string
+                  set msgFlagged to flagged status of msg as string
+                  if msgCount > 0 then set outputText to outputText & "|||ITEM|||"
+                  set outputText to outputText & msgId & "|||" & msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged & "|||" & name of mb
+                  set msgCount to msgCount + 1
+                end if
+              end if
+            end try
+          end repeat
+        end try
+      end repeat
+      return outputText
+    `;
+    }
 
     const script = buildAccountScopedScript(targetAccount, listCommand);
-    const result = executeAppleScript(script);
+    const result = executeAppleScript(script, { timeoutMs: 60000 });
 
     if (!result.success) {
       console.error(`Failed to list messages: ${result.error}`);
@@ -601,7 +694,7 @@ export class AppleMailManager {
 
     if (!result.output.trim()) return [];
 
-    return this.parseMessageList(result.output, targetMailbox, targetAccount);
+    return this.parseMessageList(result.output, mailbox || "INBOX", targetAccount);
   }
 
   /**
@@ -625,7 +718,7 @@ export class AppleMailManager {
         isFlagged: parts[5] === "true",
         isJunk: false,
         isDeleted: false,
-        mailbox,
+        mailbox: parts.length >= 7 ? parts[6] : mailbox,
         account,
         hasAttachments: false,
       });
