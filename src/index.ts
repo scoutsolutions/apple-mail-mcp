@@ -48,6 +48,9 @@ const DATE_FILTER_SCHEMA = z
     /^[a-zA-Z0-9 ,/\-:]+$/,
     "Date must contain only alphanumeric characters, spaces, commas, slashes, hyphens, and colons"
   )
+  .refine((val) => !isNaN(new Date(val).getTime()), {
+    message: "Date string must be a valid date (e.g., 'January 1, 2026' or '2026-03-15')",
+  })
   .optional();
 
 // Read version from package.json to keep it in sync
