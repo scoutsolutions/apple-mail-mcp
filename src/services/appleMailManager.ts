@@ -968,8 +968,8 @@ export class AppleMailManager {
               set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
-                set theReply to reply msg with opening window${replyAllClause}
-                set content of theReply to "${safeBody}" & return & return & content of theReply
+                set theReply to reply msg without opening window${replyAllClause}
+                set content of theReply to "${safeBody}"
                 ${sendAction}
                 return "ok"
               end if
@@ -1019,9 +1019,9 @@ export class AppleMailManager {
               set matchingMsgs to (messages of mb whose id is ${Number(id)})
               if (count of matchingMsgs) > 0 then
                 set msg to item 1 of matchingMsgs
-                set theForward to forward msg with opening window
+                set theForward to forward msg without opening window
                 ${recipientCommands}
-                ${safeBody ? `set content of theForward to "${safeBody}" & return & return & content of theForward` : ""}
+                ${safeBody ? `set content of theForward to "${safeBody}"` : ""}
                 ${sendAction}
                 return "ok"
               end if

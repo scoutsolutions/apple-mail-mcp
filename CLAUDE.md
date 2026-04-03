@@ -100,12 +100,14 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 - Set `replyAll: true` to reply to all recipients
 - Set `send: false` to save as draft instead of sending immediately
 - Default behavior: reply to sender only, send immediately
+- Uses `without opening window` internally — no Mail.app compose window is opened, which ensures reliable body delivery from background processes (see [Known Issues](#known-issue-resolved-reply--forward-empty-body-from-background-processes) below)
 
 ### forward-message
 
 - Requires message `id` and `to` array
 - Optional `body` to prepend a message
 - Set `send: false` to save as draft
+- Uses `without opening window` internally — same background-process fix as reply-to-message
 
 ### Multi-account
 
@@ -257,6 +259,41 @@ The `to`, `cc`, and `bcc` parameters must always be arrays:
 1. get-sync-status → see if Mail.app is running and syncing
 2. get-mail-stats → see total/unread counts and recently received counts
 ```
+
+## Known Issue (Resolved): Reply / Forward Empty Body from Background Processes
+
+### The Problem
+
+Prior to v1.4.0, `reply-to-message` and `forward-message` would send replies/forwards with **empty body text** when the MCP server was running as a background process (e.g., spawned via `execSync` from a Node.js MCP server, which is how Claude Code invokes it).
+
+The root cause was the AppleScript `reply msg with opening window` command. This creates a GUI compose window asynchronously. When `set content` runs immediately after, the window may not be ready yet, and the content assignment is **silently ignored**. Even adding delays (`delay 1`, `delay 2`) was unreliable — the compose window's readiness depends on system load, Mail.app state, and whether the process has GUI access.
+
+A secondary issue: the old code appended `& content of theReply` (the original quoted message) to the body. This was always a no-op — the quoted content lives in the HTML layer of the compose window, not the plaintext `content` property.
+
+### The Fix
+
+Replaced `with opening window` with `without opening window` for both `reply` and `forward` commands. With this approach:
+
+- `set content` works **immediately** — no delay needed
+- Works reliably from background processes (Node.js `execSync`, MCP stdio transport)
+- `In-Reply-To` and `References` headers are still set correctly by Mail.app (the `reply` command knows which message it's replying to)
+- No GUI compose window is opened (better for a server process)
+- `reply to all` and `send` both work as expected
+
+### Approaches That Were Tested and Failed
+
+| Approach | Result |
+|----------|--------|
+| `delay 1` / `delay 2` before `set content` | Body still empty from background process (works interactively) |
+| `reply msg without opening window` (old attempt) | Previously dismissed, but actually works — `set content` is reliable without the window |
+| `set html content` on reply object | AppleScript error — not a valid property |
+| System Events UI scripting (keystroke) | Blocked: "osascript is not allowed to send keystrokes" from background process |
+| `make new outgoing message` with same subject | Body arrives, but no `In-Reply-To`/`References` headers (can't set `reply id` on outgoing messages) |
+| Manual headers on `outgoing message` | Not possible — Mail.app's `outgoing message` class doesn't expose a `headers` property |
+
+### References
+
+- GitHub Issue: [#7 — reply-to-message sends empty body when called from background process](https://github.com/sweetrb/apple-mail-mcp/issues/7)
 
 ## Testing Your Understanding
 

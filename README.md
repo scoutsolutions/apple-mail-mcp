@@ -724,6 +724,16 @@ If installed from source, use this configuration:
 | Attachment save path restrictions | `save-attachment` only allows saving to home directory, `/tmp`, `/private/tmp`, and `/Volumes`; path traversal is blocked |
 | Attachment count limit | `send-email` and `create-draft` accept a maximum of 20 file attachments |
 
+### Reply / Forward from Background Processes (Fixed in v1.4.0)
+
+Prior to v1.4.0, `reply-to-message` and `forward-message` would send messages with **empty body text** when the MCP server ran as a background process (e.g., spawned via `execSync` from Node.js, which is how Claude Code invokes it).
+
+**Root cause:** The AppleScript `reply msg with opening window` command creates a GUI compose window asynchronously. When `set content` runs immediately after, the window may not be ready, and the content assignment is silently ignored. Delays (`delay 1`, `delay 2`) were unreliable — the compose window's readiness depends on system load, Mail.app state, and whether the process has GUI access.
+
+**Fix:** Replaced `with opening window` with `without opening window` for both `reply` and `forward` commands. With this approach, `set content` works immediately and reliably from background processes. `In-Reply-To` and `References` headers are still set correctly by Mail.app, and no GUI compose window is opened.
+
+See [#7](https://github.com/sweetrb/apple-mail-mcp/issues/7) for full details and the list of approaches that were tested.
+
 ### Backslash Escaping (Important for AI Agents)
 
 When sending content containing backslashes (`\`) to this MCP server, **you must escape them as `\\`** in the JSON parameters.
