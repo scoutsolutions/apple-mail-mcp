@@ -14,10 +14,11 @@
  */
 
 import { spawnSync } from "child_process";
-import { existsSync } from "fs";
+import { existsSync, writeFileSync } from "fs";
 import { isAbsolute, resolve } from "path";
 import { homedir } from "os";
 import { executeAppleScript } from "@/utils/applescript.js";
+import { parseMimeAttachments, extractMimeAttachment } from "@/utils/mimeParse.js";
 import type {
   Message,
   MessageContent,
@@ -493,7 +494,18 @@ export class AppleMailManager {
                 set msgDeleted to deleted status of msg as string
                 set msgMailbox to name of mb
                 set msgAccount to name of acct
-                return msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged & "|||" & msgJunk & "|||" & msgDeleted & "|||" & msgMailbox & "|||" & msgAccount
+                set hasAtt to "false"
+                try
+                  set attCount to count of mail attachments of msg
+                  if attCount > 0 then set hasAtt to "true"
+                end try
+                if hasAtt is "false" then
+                  try
+                    set rawSrc to source of msg
+                    if rawSrc contains "Content-Disposition: attachment" then set hasAtt to "true"
+                  end try
+                end if
+                return msgSubject & "|||" & msgSender & "|||" & msgDate & "|||" & msgRead & "|||" & msgFlagged & "|||" & msgJunk & "|||" & msgDeleted & "|||" & msgMailbox & "|||" & msgAccount & "|||" & hasAtt
               end if
             end try
           end repeat
@@ -526,7 +538,7 @@ export class AppleMailManager {
       isDeleted: parts[6] === "true",
       mailbox: parts[7],
       account: parts[8],
-      hasAttachments: false,
+      hasAttachments: parts.length > 9 ? parts[9] === "true" : false,
     };
   }
 
@@ -579,6 +591,40 @@ export class AppleMailManager {
       plainText: parts[1],
       htmlContent: htmlContent || undefined,
     };
+  }
+
+  /**
+   * Get the raw MIME source of a message.
+   * Used as fallback for attachment extraction when AppleScript
+   * mail attachments returns empty.
+   */
+  getRawSource(id: string): string | null {
+    const script = buildAppLevelScript(`
+      try
+        repeat with acct in accounts
+          repeat with mb in mailboxes of acct
+            try
+              set matchingMsgs to (messages of mb whose id is ${Number(id)})
+              if (count of matchingMsgs) > 0 then
+                set msg to item 1 of matchingMsgs
+                return source of msg
+              end if
+            end try
+          end repeat
+        end repeat
+        return ""
+      on error errMsg
+        return ""
+      end try
+    `);
+
+    const result = executeAppleScript(script, { timeoutMs: 120000 });
+
+    if (!result.success || !result.output.trim()) {
+      return null;
+    }
+
+    return result.output;
   }
 
   /**
@@ -1286,8 +1332,11 @@ export class AppleMailManager {
 
   /**
    * List attachments for a message.
+   * Tries AppleScript first, falls back to MIME source parsing
+   * when AppleScript returns empty (known issue across all account types).
    */
   listAttachments(id: string): Attachment[] {
+    // Attempt 1: AppleScript mail attachments
     const script = buildAppLevelScript(`
       try
         repeat with acct in accounts
@@ -1319,30 +1368,42 @@ export class AppleMailManager {
 
     const result = executeAppleScript(script, { timeoutMs: 60000 });
 
-    if (!result.success || !result.output.trim()) {
-      return [];
+    if (result.success && result.output.trim()) {
+      const items = result.output.split("|||ITEM|||");
+      const attachments: Attachment[] = [];
+
+      for (const item of items) {
+        const parts = item.split("|||");
+        if (parts.length < 3) continue;
+
+        attachments.push({
+          id: `${id}-${parts[0]}`,
+          name: parts[0],
+          mimeType: parts[1],
+          size: parseInt(parts[2]) || 0,
+        });
+      }
+
+      if (attachments.length > 0) return attachments;
     }
 
-    const items = result.output.split("|||ITEM|||");
-    const attachments: Attachment[] = [];
+    // Attempt 2: MIME source fallback
+    const rawSource = this.getRawSource(id);
+    if (!rawSource) return [];
 
-    for (const item of items) {
-      const parts = item.split("|||");
-      if (parts.length < 3) continue;
-
-      attachments.push({
-        id: `${id}-${parts[0]}`,
-        name: parts[0],
-        mimeType: parts[1],
-        size: parseInt(parts[2]) || 0,
-      });
-    }
-
-    return attachments;
+    const mimeAttachments = parseMimeAttachments(rawSource);
+    return mimeAttachments.map((att) => ({
+      id: `${id}-${att.name}`,
+      name: att.name,
+      mimeType: att.mimeType,
+      size: att.size,
+    }));
   }
 
   /**
    * Save an attachment from a message to disk.
+   * Tries AppleScript first, falls back to MIME source extraction
+   * when AppleScript can't find the attachment.
    */
   saveAttachment(id: string, attachmentName: string, savePath: string): boolean {
     // Validate attachment name: block path separators, traversal, null bytes, and backslashes
@@ -1362,11 +1423,9 @@ export class AppleMailManager {
 
     const safeName = escapeForAppleScript(attachmentName);
     const safePath = escapeForAppleScript(resolvedPath);
-
-    // Use Number(id) as defense-in-depth — the Zod schema already enforces numeric IDs,
-    // but this ensures raw interpolation into AppleScript is safe even if validation changes.
     const numericId = Number(id);
 
+    // Attempt 1: AppleScript save
     const script = buildAppLevelScript(`
       try
         repeat with acct in accounts
@@ -1395,12 +1454,37 @@ export class AppleMailManager {
 
     const result = executeAppleScript(script, { timeoutMs: 60000 });
 
-    if (!result.success || result.output.startsWith("error:")) {
-      console.error(`Failed to save attachment: ${result.error || result.output}`);
+    if (result.success && result.output === "ok") {
+      return true;
+    }
+
+    // Attempt 2: MIME source fallback
+    const rawSource = this.getRawSource(id);
+    if (!rawSource) {
+      console.error(`Failed to save attachment: could not retrieve message source`);
       return false;
     }
 
-    return true;
+    const attachment = extractMimeAttachment(rawSource, attachmentName);
+    if (!attachment) {
+      console.error(`Failed to save attachment: "${attachmentName}" not found in MIME source`);
+      return false;
+    }
+
+    try {
+      const outPath = resolve(resolvedPath, attachmentName);
+      // Verify the resolved output path is still within allowed directories
+      const isOutAllowed = allowedPrefixes.some((prefix) => outPath.startsWith(prefix));
+      if (!isOutAllowed) {
+        console.error(`Output path "${outPath}" is outside allowed directories`);
+        return false;
+      }
+      writeFileSync(outPath, attachment.data);
+      return true;
+    } catch (err) {
+      console.error(`Failed to write attachment to disk: ${err}`);
+      return false;
+    }
   }
 
   // ===========================================================================
