@@ -25,6 +25,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { AppleMailManager } from "@/services/appleMailManager.js";
+import { AppleCalendarManager } from "@/services/appleCalendarManager.js";
 
 // =============================================================================
 // Shared Validation Schemas
@@ -75,6 +76,12 @@ const server = new McpServer({
  * Handles all AppleScript execution and mail operations.
  */
 const mailManager = new AppleMailManager();
+
+/**
+ * Singleton instance of the Apple Calendar manager.
+ * Provides read-only access to Apple Calendar events across all synced accounts.
+ */
+const calendarManager = new AppleCalendarManager();
 
 // =============================================================================
 // Response Helpers
@@ -1062,6 +1069,173 @@ server.tool(
 
     return successResponse(lines.join("\n"));
   }, "Error getting sync status")
+);
+
+// =============================================================================
+// Calendar Tools (read-only)
+// =============================================================================
+
+/** Format an event row for display. */
+function formatEventLine(e: {
+  summary: string;
+  startDate: string;
+  endDate: string;
+  allDay: boolean;
+  location?: string;
+  calendarName: string;
+  id: string;
+}): string {
+  const timeStr = e.allDay ? "all-day" : `${e.startDate} → ${e.endDate}`;
+  const locStr = e.location ? ` @ ${e.location}` : "";
+  return `  • ${e.summary} [${e.calendarName}] (${timeStr})${locStr}\n    ID: ${e.id}`;
+}
+
+// --- list-calendars ---
+
+server.tool(
+  "list-calendars",
+  {},
+  withErrorHandling(() => {
+    const calendars = calendarManager.listCalendars();
+
+    if (calendars.length === 0) {
+      return successResponse("No calendars found.");
+    }
+
+    const lines = calendars.map((c) => {
+      const w = c.writable ? "✏️" : "🔒";
+      const desc = c.description ? ` — ${c.description}` : "";
+      return `  ${w} ${c.name}${desc}`;
+    });
+
+    return successResponse(`Found ${calendars.length} calendar(s):\n${lines.join("\n")}`);
+  }, "Error listing calendars")
+);
+
+// --- list-events ---
+
+server.tool(
+  "list-events",
+  {
+    startDate: z.string().describe("Start date (e.g., 'April 20, 2026 12:00 AM' or ISO format)"),
+    endDate: z.string().describe("End date (e.g., 'April 27, 2026 11:59 PM' or ISO format)"),
+    calendarName: z
+      .string()
+      .optional()
+      .describe(
+        "Optional calendar name to filter by. Exchange default is often 'Calendar'. Use list-calendars to see options."
+      ),
+    limit: z.number().optional().default(100).describe("Max results (default 100)"),
+  },
+  withErrorHandling(({ startDate, endDate, calendarName, limit = 100 }) => {
+    const events = calendarManager.listEvents(startDate, endDate, calendarName, limit);
+
+    if (events.length === 0) {
+      return successResponse("No events found in that range.");
+    }
+
+    const header = `Found ${events.length} event(s)${calendarName ? ` in "${calendarName}"` : ""}:`;
+    return successResponse(`${header}\n${events.map(formatEventLine).join("\n")}`);
+  }, "Error listing events")
+);
+
+// --- search-events ---
+
+server.tool(
+  "search-events",
+  {
+    query: z.string().min(1).describe("Text to search for in event summary, location, or notes"),
+    startDate: z
+      .string()
+      .optional()
+      .describe("Optional start date (highly recommended - searching all history is slow)"),
+    endDate: z.string().optional().describe("Optional end date"),
+    limit: z.number().optional().default(50).describe("Max results (default 50)"),
+  },
+  withErrorHandling(({ query, startDate, endDate, limit = 50 }) => {
+    const events = calendarManager.searchEvents(query, startDate, endDate, limit);
+
+    if (events.length === 0) {
+      return successResponse(`No events matching "${query}".`);
+    }
+
+    return successResponse(
+      `Found ${events.length} event(s) matching "${query}":\n${events.map(formatEventLine).join("\n")}`
+    );
+  }, "Error searching events")
+);
+
+// --- get-event ---
+
+server.tool(
+  "get-event",
+  {
+    uid: z.string().min(1).describe("Event UID (get from list-events or search-events)"),
+  },
+  withErrorHandling(({ uid }) => {
+    const event = calendarManager.getEvent(uid);
+
+    if (!event) {
+      return successResponse(`Event with UID "${uid}" not found.`);
+    }
+
+    const lines: string[] = [];
+    lines.push(`📅 ${event.summary}`);
+    lines.push(`Calendar: ${event.calendarName}`);
+    lines.push(`When: ${event.allDay ? "all-day on " : ""}${event.startDate} → ${event.endDate}`);
+    if (event.location) lines.push(`Location: ${event.location}`);
+    if (event.status) lines.push(`Status: ${event.status}`);
+    if (event.url) lines.push(`URL: ${event.url}`);
+
+    if (event.attendees.length > 0) {
+      lines.push(`\nAttendees (${event.attendees.length}):`);
+      for (const a of event.attendees) {
+        lines.push(`  • ${a.name} (${a.status})`);
+      }
+    }
+
+    if (event.description) {
+      lines.push(`\n--- Notes ---\n${event.description}`);
+    }
+
+    return successResponse(lines.join("\n"));
+  }, "Error getting event")
+);
+
+// --- get-today ---
+
+server.tool(
+  "get-today",
+  {},
+  withErrorHandling(() => {
+    const events = calendarManager.getToday();
+
+    if (events.length === 0) {
+      return successResponse("No events today.");
+    }
+
+    return successResponse(
+      `Today (${events.length} event(s)):\n${events.map(formatEventLine).join("\n")}`
+    );
+  }, "Error getting today's events")
+);
+
+// --- get-this-week ---
+
+server.tool(
+  "get-this-week",
+  {},
+  withErrorHandling(() => {
+    const events = calendarManager.getThisWeek();
+
+    if (events.length === 0) {
+      return successResponse("No events this week.");
+    }
+
+    return successResponse(
+      `This week (${events.length} event(s)):\n${events.map(formatEventLine).join("\n")}`
+    );
+  }, "Error getting this week's events")
 );
 
 // =============================================================================
