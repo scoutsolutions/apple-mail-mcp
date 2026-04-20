@@ -164,7 +164,9 @@ export class AppleCalendarManager {
               set eAllDay to allday event of e
               set eLoc to ""
               try
-                set eLoc to location of e
+                set locVal to location of e
+                set locText to locVal as text
+                if locText is not "missing value" then set eLoc to locText
               end try
               set out to out & eId & "${FIELD_SEP}" & eSummary & "${FIELD_SEP}" & eStart & "${FIELD_SEP}" & eEnd & "${FIELD_SEP}" & eAllDay & "${FIELD_SEP}" & eLoc & "${FIELD_SEP}" & cName & "${RECORD_SEP}"
               set counter to counter + 1
