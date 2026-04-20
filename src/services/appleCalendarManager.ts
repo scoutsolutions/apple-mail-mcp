@@ -135,7 +135,8 @@ export class AppleCalendarManager {
             set eLoc to ""
             try
               set locVal to location of e
-              if locVal is not missing value then set eLoc to locVal
+              set locText to locVal as text
+              if locText is not "missing value" then set eLoc to locText
             end try
             set out to out & eId & "${FIELD_SEP}" & eSummary & "${FIELD_SEP}" & eStart & "${FIELD_SEP}" & eEnd & "${FIELD_SEP}" & eAllDay & "${FIELD_SEP}" & eLoc & "${FIELD_SEP}" & "${escapeForAppleScript(calendarName)}" & "${RECORD_SEP}"
             set counter to counter + 1
@@ -214,7 +215,8 @@ export class AppleCalendarManager {
             set eLoc to ""
             try
               set locVal to location of e
-              if locVal is not missing value then set eLoc to locVal
+              set locText to locVal as text
+              if locText is not "missing value" then set eLoc to locText
             end try
             set eDesc to ""
             try
@@ -268,22 +270,26 @@ export class AppleCalendarManager {
             set eLoc to ""
             try
               set locVal to location of e
-              if locVal is not missing value then set eLoc to locVal
+              set locText to locVal as text
+              if locText is not "missing value" then set eLoc to locText
             end try
             set eDesc to ""
             try
               set descVal to description of e
-              if descVal is not missing value then set eDesc to descVal
+              set descText to descVal as text
+              if descText is not "missing value" then set eDesc to descText
             end try
             set eStatus to ""
             try
               set statusVal to status of e
-              if statusVal is not missing value then set eStatus to statusVal as string
+              set statusText to statusVal as text
+              if statusText is not "missing value" then set eStatus to statusText
             end try
             set eUrl to ""
             try
               set urlVal to url of e
-              if urlVal is not missing value then set eUrl to urlVal
+              set urlText to urlVal as text
+              if urlText is not "missing value" then set eUrl to urlText
             end try
             set attOut to ""
             try
@@ -291,18 +297,21 @@ export class AppleCalendarManager {
                 set aName to ""
                 try
                   set nameVal to display name of a
-                  if nameVal is not missing value then set aName to nameVal
+                  set nameText to nameVal as text
+                  if nameText is not "missing value" then set aName to nameText
                 end try
                 if aName is "" then
                   try
                     set emailVal to email of a
-                    if emailVal is not missing value then set aName to emailVal
+                    set emailText to emailVal as text
+                    if emailText is not "missing value" then set aName to emailText
                   end try
                 end if
                 set aStatus to ""
                 try
                   set pStatus to participation status of a
-                  if pStatus is not missing value then set aStatus to pStatus as string
+                  set pStatusText to pStatus as text
+                  if pStatusText is not "missing value" then set aStatus to pStatusText
                 end try
                 set attOut to attOut & aName & ":" & aStatus & ","
               end repeat
