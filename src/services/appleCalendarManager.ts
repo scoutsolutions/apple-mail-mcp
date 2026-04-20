@@ -206,7 +206,10 @@ export class AppleCalendarManager {
    * Date range filters improve performance significantly.
    */
   searchEvents(query: string, startDate?: string, endDate?: string, limit = 50): CalendarEvent[] {
-    const queryEsc = escapeForAppleScript(query.toLowerCase());
+    // Note: AppleScript's `ignoring case` directive handles case folding
+    // natively. No need to lowercase the query in TypeScript - doing so
+    // would mix JS's Unicode case rules with AppleScript's.
+    const queryEsc = escapeForAppleScript(query);
     const hasDateRange = startDate && endDate;
 
     const script = buildCalendarScript(`
@@ -234,10 +237,16 @@ export class AppleCalendarManager {
             end try
             set eDesc to ""
             try
-              set eDesc to description of e
+              set descVal to description of e
+              set descText to descVal as text
+              if descText is not "missing value" then set eDesc to descText
             end try
             set combined to eSummary & " " & eLoc & " " & eDesc
-            if combined contains "${queryEsc}" or (do shell script "echo " & quoted form of combined & " | tr '[:upper:]' '[:lower:]'") contains "${queryEsc}" then
+            set matched to false
+            ignoring case
+              if combined contains "${queryEsc}" then set matched to true
+            end ignoring
+            if matched then
               set eId to uid of e
               set eStart to (start date of e) as string
               set eEnd to (end date of e) as string
