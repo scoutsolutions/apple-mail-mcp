@@ -54,6 +54,59 @@ const DATE_FILTER_SCHEMA = z
   })
   .optional();
 
+/** Required variant of DATE_FILTER_SCHEMA (no .optional()). */
+const REQUIRED_DATE_SCHEMA = z
+  .string()
+  .regex(
+    /^[a-zA-Z0-9 ,/\-:]+$/,
+    "Date must contain only alphanumeric characters, spaces, commas, slashes, hyphens, and colons"
+  )
+  .refine((val) => !isNaN(new Date(val).getTime()), {
+    message: "Date string must be a valid date (e.g., 'January 1, 2026' or '2026-03-15')",
+  });
+
+/** Calendar names are free-form text from Apple Calendar. Reject control chars,
+ *  double quote, and backslash to prevent AppleScript literal breakout. */
+
+const CALENDAR_NAME_SCHEMA = z
+  .string()
+  .min(1)
+  .max(200)
+  .regex(
+    // eslint-disable-next-line no-control-regex
+    /^[^\x00-\x1F\x7F\\"]+$/,
+    "Calendar name must not contain control characters, backslash, or double quote"
+  );
+
+/** Event UIDs per RFC 5545 can be essentially any text. Real UIDs from Exchange
+ *  and Outlook commonly contain '/', '+', '=', '{', '}'. So we constrain by
+ *  rejecting only the dangerous chars (control chars, quote, backslash) rather
+ *  than allowlisting a restricted charset that would break real-world UIDs. */
+const EVENT_UID_SCHEMA = z
+  .string()
+  .min(1)
+  .max(255)
+  .regex(
+    // eslint-disable-next-line no-control-regex
+    /^[^\x00-\x1F\x7F"\\]+$/,
+    "Event UID must not contain control characters, backslash, or double quote"
+  );
+
+/** Search queries are user-facing text. Allow most chars but reject control
+ *  chars. Cap length to prevent pathological AppleScript construction. */
+const SEARCH_QUERY_SCHEMA = z
+  .string()
+  .min(1)
+  .max(500)
+  .regex(
+    // eslint-disable-next-line no-control-regex
+    /^[^\x00-\x1F\x7F]+$/,
+    "Search query must not contain control characters"
+  );
+
+/** Bounded integer limit for event listing. */
+const EVENT_LIMIT_SCHEMA = z.number().int().min(1).max(500);
+
 // Read version from package.json to keep it in sync
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
@@ -1117,15 +1170,18 @@ server.tool(
 server.tool(
   "list-events",
   {
-    startDate: z.string().describe("Start date (e.g., 'April 20, 2026 12:00 AM' or ISO format)"),
-    endDate: z.string().describe("End date (e.g., 'April 27, 2026 11:59 PM' or ISO format)"),
-    calendarName: z
-      .string()
-      .optional()
-      .describe(
-        "Optional calendar name to filter by. Exchange default is often 'Calendar'. Use list-calendars to see options."
-      ),
-    limit: z.number().optional().default(100).describe("Max results (default 100)"),
+    startDate: REQUIRED_DATE_SCHEMA.describe(
+      "Start date (e.g., 'April 20, 2026 12:00 AM' or ISO format)"
+    ),
+    endDate: REQUIRED_DATE_SCHEMA.describe(
+      "End date (e.g., 'April 27, 2026 11:59 PM' or ISO format)"
+    ),
+    calendarName: CALENDAR_NAME_SCHEMA.optional().describe(
+      "Optional calendar name to filter by. Exchange default is often 'Calendar'. Use list-calendars to see options."
+    ),
+    limit: EVENT_LIMIT_SCHEMA.optional()
+      .default(100)
+      .describe("Max results (default 100, max 500)"),
   },
   withErrorHandling(({ startDate, endDate, calendarName, limit = 100 }) => {
     const events = calendarManager.listEvents(startDate, endDate, calendarName, limit);
@@ -1144,13 +1200,12 @@ server.tool(
 server.tool(
   "search-events",
   {
-    query: z.string().min(1).describe("Text to search for in event summary, location, or notes"),
-    startDate: z
-      .string()
-      .optional()
-      .describe("Optional start date (highly recommended - searching all history is slow)"),
-    endDate: z.string().optional().describe("Optional end date"),
-    limit: z.number().optional().default(50).describe("Max results (default 50)"),
+    query: SEARCH_QUERY_SCHEMA.describe("Text to search for in event summary, location, or notes"),
+    startDate: REQUIRED_DATE_SCHEMA.optional().describe(
+      "Optional start date (highly recommended - searching all history is slow)"
+    ),
+    endDate: REQUIRED_DATE_SCHEMA.optional().describe("Optional end date"),
+    limit: EVENT_LIMIT_SCHEMA.optional().default(50).describe("Max results (default 50, max 500)"),
   },
   withErrorHandling(({ query, startDate, endDate, limit = 50 }) => {
     const events = calendarManager.searchEvents(query, startDate, endDate, limit);
@@ -1170,7 +1225,7 @@ server.tool(
 server.tool(
   "get-event",
   {
-    uid: z.string().min(1).describe("Event UID (get from list-events or search-events)"),
+    uid: EVENT_UID_SCHEMA.describe("Event UID (get from list-events or search-events)"),
   },
   withErrorHandling(({ uid }) => {
     const event = calendarManager.getEvent(uid);
