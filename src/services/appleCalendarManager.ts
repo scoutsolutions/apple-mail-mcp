@@ -18,9 +18,18 @@ import type { AppleCalendar, CalendarEvent, CalendarEventDetail, EventAttendee }
 
 /**
  * Escapes text for safe embedding in AppleScript string literals.
+ * Rejects control characters that could escape the string literal and
+ * inject AppleScript statements (e.g., newline injection leading to
+ * `do shell script` execution).
  */
 function escapeForAppleScript(text: string): string {
   if (!text) return "";
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1F\x7F]/.test(text)) {
+    throw new Error(
+      "Invalid control character in AppleScript string input (rejected to prevent statement injection)"
+    );
+  }
   return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
@@ -49,11 +58,14 @@ function appleDateToIso(dateStr: string): string {
 }
 
 /**
- * Records separator used in multi-field output.
- * Using a multi-char delimiter reduces collision risk with event content.
+ * Records and fields separators for multi-field AppleScript output.
+ * Using ASCII Unit Separator (0x1F) and Record Separator (0x1E) - these
+ * are the characters standard libraries designate for exactly this purpose
+ * and they cannot appear in user-supplied input (escapeForAppleScript
+ * rejects all control characters).
  */
-const FIELD_SEP = "|||FIELD|||";
-const RECORD_SEP = "|||REC|||";
+const FIELD_SEP = "\x1F";
+const RECORD_SEP = "\x1E";
 
 // =============================================================================
 // Calendar Manager
@@ -467,24 +479,43 @@ export class AppleCalendarManager {
 
   /**
    * Parse FIELD_SEP/RECORD_SEP delimited event output into CalendarEvent[].
+   * Delegates to the free function for testability.
    */
   private parseEventList(raw: string): CalendarEvent[] {
-    const events: CalendarEvent[] = [];
-    const records = raw.split(RECORD_SEP);
-    for (const rec of records) {
-      if (!rec.trim()) continue;
-      const fields = rec.split(FIELD_SEP);
-      if (fields.length < 7) continue;
-      events.push({
-        id: fields[0].trim(),
-        summary: fields[1].trim(),
-        startDate: appleDateToIso(fields[2].trim()),
-        endDate: appleDateToIso(fields[3].trim()),
-        allDay: fields[4].trim() === "true",
-        location: fields[5].trim() || undefined,
-        calendarName: fields[6].trim(),
-      });
-    }
-    return events;
+    return parseEventListImpl(raw);
   }
 }
+
+/**
+ * Free-function implementation of parseEventList for unit testing.
+ * Kept outside the class because it has no instance state.
+ */
+function parseEventListImpl(raw: string): CalendarEvent[] {
+  const events: CalendarEvent[] = [];
+  const records = raw.split(RECORD_SEP);
+  for (const rec of records) {
+    if (!rec.trim()) continue;
+    const fields = rec.split(FIELD_SEP);
+    if (fields.length < 7) continue;
+    events.push({
+      id: fields[0].trim(),
+      summary: fields[1].trim(),
+      startDate: appleDateToIso(fields[2].trim()),
+      endDate: appleDateToIso(fields[3].trim()),
+      allDay: fields[4].trim() === "true",
+      location: fields[5].trim() || undefined,
+      calendarName: fields[6].trim(),
+    });
+  }
+  return events;
+}
+
+/**
+ * Exported for unit testing only - not part of the public API.
+ */
+export const _testing = {
+  escapeForAppleScript,
+  FIELD_SEP,
+  RECORD_SEP,
+  parseEventList: parseEventListImpl,
+};
