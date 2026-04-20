@@ -49,11 +49,22 @@ import type {
  * 1. Backslashes (\) - escaped as \\
  * 2. Double quotes (") - escaped as \"
  *
+ * Rejects control characters that could escape the string literal and
+ * inject AppleScript statements (e.g., newline injection leading to
+ * `do shell script` execution).
+ *
  * @param text - Raw text to escape
  * @returns Text safe for AppleScript string embedding
+ * @throws Error if text contains any control character
  */
 function escapeForAppleScript(text: string): string {
   if (!text) return "";
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1F\x7F]/.test(text)) {
+    throw new Error(
+      "Invalid control character in AppleScript string input (rejected to prevent statement injection)"
+    );
+  }
   return text.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
