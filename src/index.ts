@@ -25,7 +25,6 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { AppleMailManager } from "@/services/appleMailManager.js";
-import { AppleCalendarManager } from "@/services/appleCalendarManager.js";
 
 // =============================================================================
 // Shared Validation Schemas
@@ -54,59 +53,6 @@ const DATE_FILTER_SCHEMA = z
   })
   .optional();
 
-/** Required variant of DATE_FILTER_SCHEMA (no .optional()). */
-const REQUIRED_DATE_SCHEMA = z
-  .string()
-  .regex(
-    /^[a-zA-Z0-9 ,/\-:]+$/,
-    "Date must contain only alphanumeric characters, spaces, commas, slashes, hyphens, and colons"
-  )
-  .refine((val) => !isNaN(new Date(val).getTime()), {
-    message: "Date string must be a valid date (e.g., 'January 1, 2026' or '2026-03-15')",
-  });
-
-/** Calendar names are free-form text from Apple Calendar. Reject control chars,
- *  double quote, and backslash to prevent AppleScript literal breakout. */
-
-const CALENDAR_NAME_SCHEMA = z
-  .string()
-  .min(1)
-  .max(200)
-  .regex(
-    // eslint-disable-next-line no-control-regex
-    /^[^\x00-\x1F\x7F\\"]+$/,
-    "Calendar name must not contain control characters, backslash, or double quote"
-  );
-
-/** Event UIDs per RFC 5545 can be essentially any text. Real UIDs from Exchange
- *  and Outlook commonly contain '/', '+', '=', '{', '}'. So we constrain by
- *  rejecting only the dangerous chars (control chars, quote, backslash) rather
- *  than allowlisting a restricted charset that would break real-world UIDs. */
-const EVENT_UID_SCHEMA = z
-  .string()
-  .min(1)
-  .max(255)
-  .regex(
-    // eslint-disable-next-line no-control-regex
-    /^[^\x00-\x1F\x7F"\\]+$/,
-    "Event UID must not contain control characters, backslash, or double quote"
-  );
-
-/** Search queries are user-facing text. Allow most chars but reject control
- *  chars. Cap length to prevent pathological AppleScript construction. */
-const SEARCH_QUERY_SCHEMA = z
-  .string()
-  .min(1)
-  .max(500)
-  .regex(
-    // eslint-disable-next-line no-control-regex
-    /^[^\x00-\x1F\x7F]+$/,
-    "Search query must not contain control characters"
-  );
-
-/** Bounded integer limit for event listing. */
-const EVENT_LIMIT_SCHEMA = z.number().int().min(1).max(500);
-
 // Read version from package.json to keep it in sync
 const require = createRequire(import.meta.url);
 const { version } = require("../package.json") as { version: string };
@@ -129,12 +75,6 @@ const server = new McpServer({
  * Handles all AppleScript execution and mail operations.
  */
 const mailManager = new AppleMailManager();
-
-/**
- * Singleton instance of the Apple Calendar manager.
- * Provides read-only access to Apple Calendar events across all synced accounts.
- */
-const calendarManager = new AppleCalendarManager();
 
 // =============================================================================
 // Response Helpers
@@ -1122,175 +1062,6 @@ server.tool(
 
     return successResponse(lines.join("\n"));
   }, "Error getting sync status")
-);
-
-// =============================================================================
-// Calendar Tools (read-only)
-// =============================================================================
-
-/** Format an event row for display. */
-function formatEventLine(e: {
-  summary: string;
-  startDate: string;
-  endDate: string;
-  allDay: boolean;
-  location?: string;
-  calendarName: string;
-  id: string;
-}): string {
-  const timeStr = e.allDay ? "all-day" : `${e.startDate} → ${e.endDate}`;
-  const locStr = e.location ? ` @ ${e.location}` : "";
-  return `  • ${e.summary} [${e.calendarName}] (${timeStr})${locStr}\n    ID: ${e.id}`;
-}
-
-// --- list-calendars ---
-
-server.tool(
-  "list-calendars",
-  {},
-  withErrorHandling(() => {
-    const calendars = calendarManager.listCalendars();
-
-    if (calendars.length === 0) {
-      return successResponse("No calendars found.");
-    }
-
-    const lines = calendars.map((c) => {
-      const w = c.writable ? "✏️" : "🔒";
-      const desc = c.description ? ` — ${c.description}` : "";
-      return `  ${w} ${c.name}${desc}`;
-    });
-
-    return successResponse(`Found ${calendars.length} calendar(s):\n${lines.join("\n")}`);
-  }, "Error listing calendars")
-);
-
-// --- list-events ---
-
-server.tool(
-  "list-events",
-  {
-    startDate: REQUIRED_DATE_SCHEMA.describe(
-      "Start date (e.g., 'April 20, 2026 12:00 AM' or ISO format)"
-    ),
-    endDate: REQUIRED_DATE_SCHEMA.describe(
-      "End date (e.g., 'April 27, 2026 11:59 PM' or ISO format)"
-    ),
-    calendarName: CALENDAR_NAME_SCHEMA.optional().describe(
-      "Optional calendar name to filter by. Exchange default is often 'Calendar'. Use list-calendars to see options."
-    ),
-    limit: EVENT_LIMIT_SCHEMA.optional()
-      .default(100)
-      .describe("Max results (default 100, max 500)"),
-  },
-  withErrorHandling(({ startDate, endDate, calendarName, limit = 100 }) => {
-    const events = calendarManager.listEvents(startDate, endDate, calendarName, limit);
-
-    if (events.length === 0) {
-      return successResponse("No events found in that range.");
-    }
-
-    const header = `Found ${events.length} event(s)${calendarName ? ` in "${calendarName}"` : ""}:`;
-    return successResponse(`${header}\n${events.map(formatEventLine).join("\n")}`);
-  }, "Error listing events")
-);
-
-// --- search-events ---
-
-server.tool(
-  "search-events",
-  {
-    query: SEARCH_QUERY_SCHEMA.describe("Text to search for in event summary, location, or notes"),
-    startDate: REQUIRED_DATE_SCHEMA.optional().describe(
-      "Optional start date (highly recommended - searching all history is slow)"
-    ),
-    endDate: REQUIRED_DATE_SCHEMA.optional().describe("Optional end date"),
-    limit: EVENT_LIMIT_SCHEMA.optional().default(50).describe("Max results (default 50, max 500)"),
-  },
-  withErrorHandling(({ query, startDate, endDate, limit = 50 }) => {
-    const events = calendarManager.searchEvents(query, startDate, endDate, limit);
-
-    if (events.length === 0) {
-      return successResponse(`No events matching "${query}".`);
-    }
-
-    return successResponse(
-      `Found ${events.length} event(s) matching "${query}":\n${events.map(formatEventLine).join("\n")}`
-    );
-  }, "Error searching events")
-);
-
-// --- get-event ---
-
-server.tool(
-  "get-event",
-  {
-    uid: EVENT_UID_SCHEMA.describe("Event UID (get from list-events or search-events)"),
-  },
-  withErrorHandling(({ uid }) => {
-    const event = calendarManager.getEvent(uid);
-
-    if (!event) {
-      return successResponse(`Event with UID "${uid}" not found.`);
-    }
-
-    const lines: string[] = [];
-    lines.push(`📅 ${event.summary}`);
-    lines.push(`Calendar: ${event.calendarName}`);
-    lines.push(`When: ${event.allDay ? "all-day on " : ""}${event.startDate} → ${event.endDate}`);
-    if (event.location) lines.push(`Location: ${event.location}`);
-    if (event.status) lines.push(`Status: ${event.status}`);
-    if (event.url) lines.push(`URL: ${event.url}`);
-
-    if (event.attendees.length > 0) {
-      lines.push(`\nAttendees (${event.attendees.length}):`);
-      for (const a of event.attendees) {
-        lines.push(`  • ${a.name} (${a.status})`);
-      }
-    }
-
-    if (event.description) {
-      lines.push(`\n--- Notes ---\n${event.description}`);
-    }
-
-    return successResponse(lines.join("\n"));
-  }, "Error getting event")
-);
-
-// --- get-today ---
-
-server.tool(
-  "get-today",
-  {},
-  withErrorHandling(() => {
-    const events = calendarManager.getToday();
-
-    if (events.length === 0) {
-      return successResponse("No events today.");
-    }
-
-    return successResponse(
-      `Today (${events.length} event(s)):\n${events.map(formatEventLine).join("\n")}`
-    );
-  }, "Error getting today's events")
-);
-
-// --- get-this-week ---
-
-server.tool(
-  "get-this-week",
-  {},
-  withErrorHandling(() => {
-    const events = calendarManager.getThisWeek();
-
-    if (events.length === 0) {
-      return successResponse("No events this week.");
-    }
-
-    return successResponse(
-      `This week (${events.length} event(s)):\n${events.map(formatEventLine).join("\n")}`
-    );
-  }, "Error getting this week's events")
 );
 
 // =============================================================================
