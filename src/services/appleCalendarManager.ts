@@ -134,7 +134,8 @@ export class AppleCalendarManager {
             set eAllDay to allday event of e
             set eLoc to ""
             try
-              set eLoc to location of e
+              set locVal to location of e
+              if locVal is not missing value then set eLoc to locVal
             end try
             set out to out & eId & "${FIELD_SEP}" & eSummary & "${FIELD_SEP}" & eStart & "${FIELD_SEP}" & eEnd & "${FIELD_SEP}" & eAllDay & "${FIELD_SEP}" & eLoc & "${FIELD_SEP}" & "${escapeForAppleScript(calendarName)}" & "${RECORD_SEP}"
             set counter to counter + 1
@@ -177,7 +178,12 @@ export class AppleCalendarManager {
 
     if (!result.success || !result.output.trim()) return [];
 
-    return this.parseEventList(result.output);
+    const events = this.parseEventList(result.output);
+    // Post-filter recurring masters whose start date falls outside the requested range.
+    // AppleScript returns the master event's original start date for recurring events,
+    // so a weekly meeting that started months ago still matches "this week" queries.
+    // Rather than showing it with a misleading date, filter it out.
+    return this.filterEventsToRange(events, startDate, endDate);
   }
 
   /**
@@ -207,7 +213,8 @@ export class AppleCalendarManager {
             set eSummary to summary of e
             set eLoc to ""
             try
-              set eLoc to location of e
+              set locVal to location of e
+              if locVal is not missing value then set eLoc to locVal
             end try
             set eDesc to ""
             try
@@ -232,7 +239,12 @@ export class AppleCalendarManager {
 
     if (!result.success || !result.output.trim()) return [];
 
-    return this.parseEventList(result.output);
+    const events = this.parseEventList(result.output);
+    // If a date range was provided, filter out recurring masters outside the range
+    if (startDate && endDate) {
+      return this.filterEventsToRange(events, startDate, endDate);
+    }
+    return events;
   }
 
   /**
@@ -255,35 +267,42 @@ export class AppleCalendarManager {
             set eAllDay to allday event of e
             set eLoc to ""
             try
-              set eLoc to location of e
+              set locVal to location of e
+              if locVal is not missing value then set eLoc to locVal
             end try
             set eDesc to ""
             try
-              set eDesc to description of e
+              set descVal to description of e
+              if descVal is not missing value then set eDesc to descVal
             end try
             set eStatus to ""
             try
-              set eStatus to (status of e) as string
+              set statusVal to status of e
+              if statusVal is not missing value then set eStatus to statusVal as string
             end try
             set eUrl to ""
             try
-              set eUrl to url of e
+              set urlVal to url of e
+              if urlVal is not missing value then set eUrl to urlVal
             end try
             set attOut to ""
             try
               repeat with a in attendees of e
                 set aName to ""
                 try
-                  set aName to display name of a
+                  set nameVal to display name of a
+                  if nameVal is not missing value then set aName to nameVal
                 end try
                 if aName is "" then
                   try
-                    set aName to email of a
+                    set emailVal to email of a
+                    if emailVal is not missing value then set aName to emailVal
                   end try
                 end if
                 set aStatus to ""
                 try
-                  set aStatus to (participation status of a) as string
+                  set pStatus to participation status of a
+                  if pStatus is not missing value then set aStatus to pStatus as string
                 end try
                 set attOut to attOut & aName & ":" & aStatus & ","
               end repeat
@@ -363,6 +382,46 @@ export class AppleCalendarManager {
   // ===========================================================================
   // Private Helpers
   // ===========================================================================
+
+  /**
+   * Filter out events whose start date falls outside the requested range.
+   *
+   * AppleScript returns the master event's original start date for recurring
+   * events, so a weekly meeting that started months ago still matches queries
+   * for "this week" (because it has an instance this week, but the date we get
+   * back is the master date, not the instance date).
+   *
+   * This filter drops events whose returned start date is outside the range,
+   * which cleanly hides recurring masters-in-the-past at the cost of also
+   * hiding their current-week instances. The tradeoff favors clarity over
+   * completeness for now.
+   *
+   * A future enhancement could expand recurrence rules to compute instance
+   * dates, but that requires parsing RRULE and handling exceptions - significant
+   * work for a non-critical feature.
+   *
+   * @param events - Events from parseEventList
+   * @param startDate - Start of the range (same format as listEvents input)
+   * @param endDate - End of the range
+   * @returns Events whose start date falls within [startDate, endDate]
+   */
+  private filterEventsToRange(
+    events: CalendarEvent[],
+    startDate: string,
+    endDate: string
+  ): CalendarEvent[] {
+    const startMs = new Date(startDate).getTime();
+    const endMs = new Date(endDate).getTime();
+
+    // If either date is invalid, skip filtering and return all events
+    if (isNaN(startMs) || isNaN(endMs)) return events;
+
+    return events.filter((e) => {
+      const eventMs = new Date(e.startDate).getTime();
+      if (isNaN(eventMs)) return true; // keep events with unparseable dates
+      return eventMs >= startMs && eventMs <= endMs;
+    });
+  }
 
   /**
    * Format a JS Date as an AppleScript-friendly date string.
